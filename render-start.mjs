@@ -71,7 +71,7 @@ function apiStub(req, res) {
 // ---------------------------------------------------------------------------
 const APIHOST_SCRIPT =
   `<script>try{localStorage.setItem("apiHost","${PUBLIC_ORIGIN}")}catch(e){}</script>` +
-  `<style>.steam-wishlist-frame,steam-wishlist,steam-wishlist-button,div:has(>steam-wishlist),div:has(>steam-wishlist-button){display:none!important}</style>`;
+  `<style>.steam-wishlist-frame,steam-wishlist,steam-wishlist-button,div:not(#page-play):has(>steam-wishlist),div:not(#page-play):has(>steam-wishlist-button){display:none!important}</style>`;
 const RAMP_TAG_RE = /<script[^>]*cdn\.intergient\.com[^>]*>\s*<\/script>/gi;
 
 function patchHtml(html) {
