@@ -84,8 +84,9 @@ export class StoreModal extends BaseModal {
     }
     return {
       tabs: [
-        { key: "packs", label: translateText("store.packs") },
-        { key: "subscriptions", label: translateText("store.subscriptions") },
+        // Self-host: the store is free (see server/selfhost.ts). The
+        // subscriptions and currency-pack tabs only sold Stripe products, so
+        // they are hidden; everything else is owned by every player.
         { key: "bundles", label: translateText("store.bundles") },
         { key: "cosmetics", label: translateText("store.cosmetics") },
         { key: "effects", label: translateText("store.effects") },
@@ -180,10 +181,23 @@ export class StoreModal extends BaseModal {
     ).filter((resolved) => resolved.relationship === "purchasable");
   }
 
+  /**
+   * Self-host: the store is a gallery of everything the player owns (which is
+   * everything), not a shelf of things to buy. Tabs list all resolved items;
+   * owned ones render an "Owned" status instead of a purchase button.
+   */
+  private resolvedAll(): ResolvedCosmetic[] {
+    return resolveCosmetics(
+      this.cosmetics,
+      this.userMeResponse,
+      this.affiliateCode,
+    );
+  }
+
   private cosmeticsGroups(
     tab: CosmeticsSubTab,
   ): readonly (readonly ResolvedCosmetic[])[] {
-    const items = this.resolvedPurchasables();
+    const items = this.resolvedAll();
     if (tab === "flags") {
       return items
         .filter((resolved) => resolved.type === "flag")
@@ -218,7 +232,7 @@ export class StoreModal extends BaseModal {
       return this.cosmeticsGroups(this.cosmeticsSubTab);
     }
     if (tab === "effects") {
-      return this.resolvedPurchasables()
+      return this.resolvedAll()
         .filter((resolved) => resolved.type === "effect")
         .map((resolved) => [resolved]);
     }
@@ -347,6 +361,11 @@ export class StoreModal extends BaseModal {
           true,
         );
       }
+    }
+    // Self-host: everything is owned; show a status chip instead of a
+    // purchase button.
+    if (active.relationship === "owned") {
+      return this.renderStatus(translateText("store.owned"));
     }
     return this.renderPurchaseAction(active, userHasSubscription);
   }
@@ -538,15 +557,11 @@ export class StoreModal extends BaseModal {
   }
 
   private renderPackGrid(): TemplateResult {
-    // The custom-amount card is always purchasable (priced inline server-side,
-    // no catalog entry), and follows the fixed packs at the end of the grid.
-    // On BOTH rails: the Steam rail sells custom amounts since OPE-337, so
-    // there is no longer a rail on which this card is a dead button.
+    // Self-host: currency packs are blocked (see Cosmetics.ts), so this tab
+    // only ever renders the empty state. The custom-amount purchase card is
+    // gone: there is no payment rail on the self-host.
     return this.renderBrowser(this.visibleGroups, {
       emptyTranslationKey: "store.no_packs",
-      trailingContent: html`<custom-currency-card
-        class="block w-[calc(50%-0.5rem)] max-w-48 shrink-0 sm:w-48"
-      ></custom-currency-card>`,
       gridClass:
         "flex flex-wrap items-stretch justify-center content-start gap-4 p-4 sm:p-8",
       cardClass: "block w-[calc(50%-0.5rem)] max-w-48 shrink-0 sm:w-48",

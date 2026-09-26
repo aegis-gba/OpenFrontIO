@@ -2,6 +2,9 @@ import http from 'node:http';
 import net from 'node:net';
 import zlib from 'node:zlib';
 import { spawn, execSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 
 // Report the actually-deployed commit so the client/server version check
 // compares the real build on both sides (both read this same value).
@@ -11,11 +14,27 @@ try {
   if (/^[0-9a-f]+$/.test(head)) GIT_COMMIT = head;
 } catch {}
 
+// Self-host: everything in the store is free. Serve the vendored official
+// cosmetics catalog (validated against the repo's CosmeticsSchema at build
+// time) so the store, inventory, and the worker's privilege checker all see
+// the real item list. Loaded once at startup; falls back to [] if missing.
+const REPO_ROOT = path.dirname(fileURLToPath(import.meta.url));
+let COSMETICS_CATALOG = '[]';
+try {
+  COSMETICS_CATALOG = readFileSync(path.join(REPO_ROOT, 'vendor', 'cosmetics.json'), 'utf8');
+} catch {}
+
+// Public port this adapter listens on; the game server's PrivilegeRefresher
+// fetches the catalog through it (it cannot reach the dead localhost:8787
+// the default jwtIssuer() points at).
+const PUBLIC_PORT = Number(process.env.PORT || 10000);
+
 // One public listener routes the upstream master and one game worker.
 const child = spawn(process.execPath, ['--import', 'tsx', 'src/server/Server.ts'], {
   stdio: 'inherit',
   env: { ...process.env, GAME_ENV: 'dev', DOMAIN: 'localhost', NUM_WORKERS: '1',
     INSTANCE_LETTER: 'a', GIT_COMMIT,
+    SELFHOST_CATALOG_BASE: `http://127.0.0.1:${PUBLIC_PORT}`,
     TURNSTILE_SITE_KEY: '1x00000000000000000000AA', ADMIN_BOT_API_KEY: '',
     SUBDOMAIN: '', GAME_HOST: '', SITE_HOST: '', LOBBY_COORDINATOR: 'off' },
 });
@@ -85,7 +104,6 @@ function apiStub(req, res) {
   const stubs = {
     '/cluster.json': [404, { error: 'site not registered' }],
     '/news.json': [404, { error: 'not found' }],
-    '/cosmetics.json': [200, []],
     '/reserved_clan_tags': [200, []],
     '/marketing/consent': [200, {}],
     // NOTE: '/users/@me' is intentionally NOT stubbed here. It routes to the
@@ -94,7 +112,23 @@ function apiStub(req, res) {
     // never be cached.
   };
   const hit = stubs[path];
-  if (!hit) return false;
+  if (!hit) {
+    // Self-host: serve the vendored cosmetics catalog (see COSMETICS_CATALOG
+    // above). Cacheable: the client and the worker's PrivilegeRefresher both
+    // poll it, and it only changes when we vendor a new copy.
+    if (path === '/cosmetics.json') {
+      const body = Buffer.from(COSMETICS_CATALOG);
+      res.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'content-length': body.length,
+        'cache-control': 'public, max-age=3600',
+        ...corsHeaders(req),
+      });
+      res.end(body);
+      return true;
+    }
+    return false;
+  }
   json(hit[0], hit[1]);
   return true;
 }

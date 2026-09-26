@@ -1,4 +1,5 @@
 import { UserSettings } from "../core/game/UserSettings";
+import { isWeakDevice } from "./ClientPlatform";
 import { GraphicsOverridesSchema, type GraphicsOverrides } from "./render/gl";
 import builtinPresets from "./render/gl/graphics-presets.json";
 import { translateText } from "./Utils";
@@ -102,4 +103,18 @@ export function migrateLegacyGraphicsSettings(
       ? { [translateText("graphics_setting.preset_migrated_name")]: current }
       : {},
   );
+  // Self-host: players with no graphics settings at all on weak devices
+  // (Chromebooks, old phones) start on the Performance preset — the expensive
+  // effect passes are the first thing a slow GPU chokes on. Anything with
+  // existing settings (custom, or the colorblind upgrade above) is left
+  // untouched, and the preset can be switched back to Default in the graphics
+  // tab at any time.
+  if (Object.keys(current).length === 0 && isWeakDevice()) {
+    const performance = BUILTIN_PRESETS.find(
+      (preset) => preset.nameKey === "graphics_setting.preset_performance",
+    );
+    if (performance !== undefined) {
+      userSettings.setGraphicsOverrides(performance.overrides);
+    }
+  }
 }

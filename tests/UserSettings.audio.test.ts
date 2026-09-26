@@ -165,11 +165,13 @@ describe("master volume default", () => {
 
   afterEach(pretendWeb);
 
-  it("starts web silent when the player has never chosen any audio value", () => {
-    // Parity with main, where both old sliders defaulted to 0, and ordinary
-    // autoplay etiquette: nothing should start making noise by itself.
+  it("starts web audible at the default master level (self-host: silent reads as broken)", () => {
+    // On the self-host a silent default reads as broken audio: the sliders
+    // move with no sound and the Test buttons sit disabled, so players
+    // conclude audio doesn't work at all. Start audible; a stored 0 is still
+    // a deliberate mute.
     const s = new UserSettings();
-    expect(s.audioVolume("master")).toBe(0);
+    expect(s.audioVolume("master")).toBeCloseTo(0.9);
     // The channels themselves are untouched — only master differs.
     expect(s.audioVolume("music")).toBeCloseTo(0.5);
     expect(s.audioVolume("effects")).toBeCloseTo(0.7);
@@ -199,36 +201,36 @@ describe("master volume default", () => {
     expect(s.audioVolume("effects")).toBe(0);
   });
 
-  it("announces master when the first write flips the carve-out", () => {
-    // Otherwise the mixer stays at master 0 — a silent game — while the tab
-    // shows master at its default.
+  it("announces each channel's own key when written (no cross-key master flip on self-host)", () => {
+    // There is no silent-master carve-out anymore, so writing a channel only
+    // announces that channel.
     const seen: unknown[] = [];
     const type = `${USER_SETTINGS_CHANGED_EVENT}:settings.audio.master`;
     const listener = (e: Event) => seen.push((e as CustomEvent).detail);
     globalThis.addEventListener(type, listener);
 
     const s = new UserSettings();
-    expect(s.audioVolume("master")).toBe(0);
     s.setAudioVolume("effects", 0.7);
+    s.setAudioVolume("music", 0.3);
 
     globalThis.removeEventListener(type, listener);
+    expect(seen).toEqual([]);
     expect(s.audioVolume("master")).toBeCloseTo(0.9);
-    expect(seen).toEqual(["0.9"]);
   });
 
-  it("announces the flip through the legacy setters too", () => {
+  it("announces master under its own key when written", () => {
     const seen: unknown[] = [];
     const type = `${USER_SETTINGS_CHANGED_EVENT}:settings.audio.master`;
     const listener = (e: Event) => seen.push((e as CustomEvent).detail);
     globalThis.addEventListener(type, listener);
 
-    new UserSettings().setBackgroundMusicVolume(0.5);
+    new UserSettings().setAudioVolume("master", 0.5);
 
     globalThis.removeEventListener(type, listener);
-    expect(seen).toEqual(["0.9"]);
+    expect(seen).toEqual(["0.5"]);
   });
 
-  it("announces the flip only once, not on every later write", () => {
+  it("writing a channel never announces master", () => {
     const seen: unknown[] = [];
     const type = `${USER_SETTINGS_CHANGED_EVENT}:settings.audio.master`;
     const listener = (e: Event) => seen.push((e as CustomEvent).detail);
@@ -240,7 +242,7 @@ describe("master volume default", () => {
     s.setAudioVolume("alerts", 0.2);
 
     globalThis.removeEventListener(type, listener);
-    expect(seen).toEqual(["0.9"]);
+    expect(seen).toEqual([]);
   });
 
   it("does not announce a flip when master is stored", () => {
@@ -263,12 +265,12 @@ describe("master volume default", () => {
     expect(new UserSettings().audioVolume("master")).toBeCloseTo(0.9);
   });
 
-  it("does not trip the carve-out on the blur toggles alone", () => {
-    // Those are not a volume choice, so they must not unmute a web player.
+  it("keeps master at its default when only the blur toggles are set", () => {
+    // Those are not a volume choice; master stays at the audible default.
     const s = new UserSettings();
     s.setMuteOnBlur(true);
     s.setAlertsWhenUnfocused(false);
-    expect(new UserSettings().audioVolume("master")).toBe(0);
+    expect(new UserSettings().audioVolume("master")).toBeCloseTo(0.9);
   });
 
   it("lets a stored master value win on either platform", () => {
@@ -329,9 +331,9 @@ describe("resetAudio", () => {
     s.resetAudio();
 
     const after = new UserSettings();
-    // Silent on web, because nothing is stored any more — not even the
-    // legacy keys that would otherwise trip the master carve-out.
-    expect(after.audioVolume("master")).toBe(0);
+    // Audible on web now, because the fresh-install default is the audible
+    // master — nothing stored means the default, not silence.
+    expect(after.audioVolume("master")).toBeCloseTo(0.9);
     expect(after.audioVolume("music")).toBeCloseTo(0.5);
     expect(after.audioVolume("effects")).toBeCloseTo(0.7);
     expect(after.audioVolume("alerts")).toBeCloseTo(0.8);
@@ -405,7 +407,7 @@ describe("resetAudio", () => {
     s.resetAudio();
 
     globalThis.removeEventListener(type, listener);
-    expect(seen).toEqual(["0"]);
+    expect(seen).toEqual(["0.9"]);
     expect(seen.every((d) => !isNaN(parseFloat(String(d))))).toBe(true);
   });
 });
@@ -418,11 +420,10 @@ describe("one-time audio reset", () => {
 
   afterEach(pretendWeb);
 
-  it("clears the state that had a web player hearing cues they never chose", () => {
+  it("clears legacy audio state back to the audible fresh-install defaults", () => {
     // The reported case: the old build's music slider was dragged once and
-    // effects was left alone, so the master carve-out reads "has chosen" and
-    // the four channels that slider never covered fall through to the new
-    // defaults. Audible, at full level, opted into by nobody.
+    // effects was left alone. The one-time reset drops the legacy keys so
+    // every channel resolves to the new defaults, master included.
     localStorage.setItem("settings.backgroundMusicVolume", "0.4");
     const before = new UserSettings();
     expect(before.audioVolume("master")).toBeCloseTo(0.9);
@@ -431,7 +432,7 @@ describe("one-time audio reset", () => {
     expect(new UserSettings().resetAudioOnce()).toBe(true);
 
     const after = new UserSettings();
-    expect(after.audioVolume("master")).toBe(0);
+    expect(after.audioVolume("master")).toBeCloseTo(0.9);
     expect(localStorage.getItem("settings.backgroundMusicVolume")).toBeNull();
   });
 
@@ -507,6 +508,6 @@ describe("one-time audio reset", () => {
     new UserSettings().resetAudioOnce();
 
     globalThis.removeEventListener(type, listener);
-    expect(seen).toEqual(["0"]);
+    expect(seen).toEqual(["0.9"]);
   });
 });

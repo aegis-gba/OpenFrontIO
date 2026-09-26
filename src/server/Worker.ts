@@ -40,6 +40,7 @@ import { resolveVerifiedJoin } from "./Privilege";
 import { MapPlaylist } from "./MapPlaylist";
 import { setNoStoreHeaders } from "./NoStoreHeaders";
 import { PrivilegeRefresher } from "./PrivilegeRefresher";
+import { SELFHOST_FREE_FLARES, selfhostCatalogBase } from "./selfhost";
 import { startRankedCheckinLoops } from "./RankedCheckin";
 import { ServerEnv } from "./ServerEnv";
 import { SingleplayerPresence } from "./SingleplayerPresence";
@@ -105,10 +106,14 @@ export async function startWorker() {
     initWorkerMetrics(gm, lobbyService, singleplayerPresence);
   }
 
+  // Self-host: the adapter serves the vendored cosmetics catalog on its
+  // public port (SELFHOST_CATALOG_BASE); ServerEnv.jwtIssuer() points at a
+  // dead localhost:8787 here, so the refresher must not use it.
+  const catalogBase = selfhostCatalogBase();
   const privilegeRefresher = new PrivilegeRefresher(
-    ServerEnv.jwtIssuer() + "/cosmetics.json",
+    catalogBase + "/cosmetics.json",
     ServerEnv.apiKey(),
-    ServerEnv.jwtIssuer() + "/reserved_clan_tags",
+    catalogBase + "/reserved_clan_tags",
     log,
   );
   privilegeRefresher.start();
@@ -671,7 +676,11 @@ export async function startWorker() {
           return;
         }
 
-        let flares: string[] | undefined;
+        // Self-host: every player owns every cosmetic (see selfhost.ts), so
+        // guests join with the full wildcard flare set. Accounts overwrite
+        // this below with the flares from their verified profile, which
+        // carries the same grant.
+        let flares: string[] | undefined = [...SELFHOST_FREE_FLARES];
         let publicId: string | undefined;
         let friends: string[] = [];
         let ownedClanTags: string[] = [];

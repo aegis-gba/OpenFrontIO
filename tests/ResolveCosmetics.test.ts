@@ -253,13 +253,13 @@ describe("resolveCosmetics", () => {
       expect(flagItem?.colorPalette).toBeNull();
     });
 
-    test("purchasable when not logged in and currency price exists", () => {
+    test("owned when not logged in (self-host: store is free)", () => {
       const cosmetics = makeCosmetics({
         flags: { cool_flag: flag as any },
       });
       const result = resolveCosmetics(cosmetics, false, null);
       const flagItem = result.find((r) => r.key === "flag:cool_flag");
-      expect(flagItem?.relationship).toBe("purchasable");
+      expect(flagItem?.relationship).toBe("owned");
     });
 
     test("owned with wildcard flare", () => {
@@ -546,12 +546,12 @@ describe("resolveCosmetics cosmetic packs", () => {
     expect(resolved.relationship).toBe("purchasable");
   });
 
-  test("purchasable when the player owns none of the items", () => {
+  test("owned for guests even when the player owns none of the items (self-host: store is free)", () => {
     expect(
       packOf(resolveCosmetics(catalog(), makeUserMe(), null)).relationship,
     ).toBe("purchasable");
     expect(packOf(resolveCosmetics(catalog(), false, null)).relationship).toBe(
-      "purchasable",
+      "owned",
     );
   });
 

@@ -11,6 +11,7 @@ import {
   deriveAccountPersistentId,
   deriveAccountPublicId,
 } from "./identityNamespaces";
+import { SELFHOST_FREE_FLARES } from "./selfhost";
 
 // Re-exported so existing importers keep working; the canonical home of
 // these pure functions is ./identityNamespaces (no server dependencies).
@@ -415,6 +416,9 @@ export function buildPocketEduUserMe(
       achievements: { singleplayerMap: [], player: [] },
       friends: [],
       subscription: null,
+      // Self-host: the store is free (see ./selfhost). Every account owns
+      // every cosmetic; this is a grant, not a fabricated purchase.
+      flares: [...SELFHOST_FREE_FLARES],
     },
   };
   const parsed = UserMeResponseSchema.safeParse(candidate);

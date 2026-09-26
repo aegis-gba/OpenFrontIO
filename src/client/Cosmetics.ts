@@ -902,8 +902,13 @@ export function cosmeticRelationship(
   },
   userMeResponse: UserMeResponse | false,
 ): "owned" | "purchasable" | "blocked" {
-  const flares =
-    userMeResponse === false ? [] : (userMeResponse.player.flares ?? []);
+  // Self-host: the store is free and there is no signed-in profile for a
+  // guest (getUserMe() === false). Guests own every cosmetic, exactly like
+  // accounts do via the wildcard flare grant (see server/selfhost.ts).
+  if (userMeResponse === false) {
+    return "owned";
+  }
+  const flares = userMeResponse.player.flares ?? [];
 
   if (flares.includes(opts.wildcardFlare)) {
     return "owned";
@@ -931,10 +936,13 @@ export function patternRelationship(
   userMeResponse: UserMeResponse | false,
   affiliateCode: string | null,
 ): "owned" | "purchasable" | "blocked" {
+  // Self-host: guests own everything (see cosmeticRelationship).
+  if (userMeResponse === false) {
+    return "owned";
+  }
   if (colorPalette === null) {
     // For backwards compatibility only show non-colored patterns if they are owned.
-    const flares =
-      userMeResponse === false ? [] : (userMeResponse.player.flares ?? []);
+    const flares = userMeResponse.player.flares ?? [];
     if (
       flares.includes("pattern:*") ||
       flares.includes(`pattern:${pattern.name}`)
@@ -946,8 +954,7 @@ export function patternRelationship(
 
   if (colorPalette.isArchived) {
     // Check ownership first — if owned, show it even if archived.
-    const flares =
-      userMeResponse === false ? [] : (userMeResponse.player.flares ?? []);
+    const flares = userMeResponse.player.flares ?? [];
     if (
       flares.includes("pattern:*") ||
       flares.includes(`pattern:${pattern.name}:${colorPalette.name}`)
@@ -1076,8 +1083,11 @@ export function ownedPackItems(
   pack: CosmeticPack,
   userMeResponse: UserMeResponse | false,
 ): CosmeticPackItem[] {
-  const flares =
-    userMeResponse === false ? [] : (userMeResponse.player.flares ?? []);
+  // Self-host: guests own everything (see cosmeticRelationship).
+  if (userMeResponse === false) {
+    return [...pack.items];
+  }
+  const flares = userMeResponse.player.flares ?? [];
   return pack.items.filter(
     (item) =>
       flares.includes(packItemFlare(item)) || flares.includes(`${item.type}:*`),
@@ -1241,7 +1251,10 @@ export function resolveCosmetics(
     // so gating rendered those packs as blocked and their buy button never
     // appeared. A listed currency pack is buyable; if a rail cannot sell it,
     // the checkout call is what says so.
-    const rel = "purchasable";
+    //
+    // Self-host: there is no payment rail and currency buys cosmetics that
+    // are all free anyway, so currency packs are not offered at all.
+    const rel = "blocked" as const;
     result.push({
       type: "pack",
       cosmetic: pack,
@@ -1423,15 +1436,10 @@ export async function getPlayerCosmeticsRefs(
           flagDenied = true;
         }
       } else {
-        // Unknown profile: keep the selection, but do not send it. An
-        // entitlement we cannot verify is not one to claim — the server does
-        // not strip an unowned cosmetic ref, it refuses the connection
-        // (Privilege returns "forbidden", Worker.ts closes the socket with
-        // CosmeticsForbidden), so sending it would trade a lost flag for an
-        // unjoinable multiplayer. The pattern, skin and crown branches nearby
-        // do send theirs on an unknown profile and carry that exposure; this
-        // one deliberately does not.
-        flag = null;
+        // Self-host: the store is free and the worker grants every player
+        // the full wildcard flare set (see server/selfhost.ts), so the join
+        // check allows the flag. Keep the selection and send it, like the
+        // pattern, skin and crown branches nearby already do.
       }
     }
   }

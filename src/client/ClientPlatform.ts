@@ -11,3 +11,15 @@ export function clientPlatform(): ClientPlatform {
   }
   return "web";
 }
+
+/**
+ * Heuristic for low-end devices (Chromebooks, older phones): few logical CPU
+ * cores. Used to default to the Performance graphics preset and to cap the
+ * WebGL backing-store resolution. An unknown core count is not weak — never
+ * degrade when the API is missing.
+ */
+export function isWeakDevice(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const cores = navigator.hardwareConcurrency ?? 8;
+  return cores <= 4;
+}

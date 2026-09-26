@@ -108,7 +108,7 @@ describe("cosmeticRelationship", () => {
     ).toBe("purchasable");
   });
 
-  it("returns blocked when user is not logged in and no currency price", () => {
+  it("returns owned when user is not logged in (self-host: store is free)", () => {
     expect(
       cosmeticRelationship(
         {
@@ -121,10 +121,10 @@ describe("cosmeticRelationship", () => {
         },
         false,
       ),
-    ).toBe("blocked");
+    ).toBe("owned");
   });
 
-  it("returns purchasable when user is not logged in but currency price exists", () => {
+  it("returns owned when user is not logged in even with a currency price (self-host: store is free)", () => {
     expect(
       cosmeticRelationship(
         {
@@ -137,7 +137,7 @@ describe("cosmeticRelationship", () => {
         },
         false,
       ),
-    ).toBe("purchasable");
+    ).toBe("owned");
   });
 
   it("returns purchasable when item has soft currency price", () => {

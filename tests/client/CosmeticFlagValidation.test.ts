@@ -83,17 +83,16 @@ describe("flag validation against an unknown profile", () => {
     expect(new UserSettings().getFlag()).toBe("flag:donator");
   });
 
-  // The other half of the same decision: keeping the selection must not mean
-  // claiming it. The server does not strip an unverifiable cosmetic ref — it
-  // closes the socket with CosmeticsForbidden — so sending a flag we could
-  // not verify would trade a lost flag for an unjoinable multiplayer.
-  it("does not send a flag it could not verify", async () => {
+  // Self-host: the store is free — guests own every cosmetic (the server
+  // grants guests wildcard flares), so a saved flag is always verifiable and
+  // is sent with the player's refs.
+  it("sends the saved flag for a guest, who owns every cosmetic", async () => {
     selectFlag();
     vi.mocked(getUserMe).mockResolvedValue(false);
 
     const refs = await getPlayerCosmeticsRefs();
 
-    expect(refs.flag).toBeUndefined();
+    expect(refs.flag).toBe("flag:donator");
   });
 
   // The narrow case that actually loses data. A flag written before per-player

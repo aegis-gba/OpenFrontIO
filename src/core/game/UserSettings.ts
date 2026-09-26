@@ -10,9 +10,6 @@ import {
   DEFAULT_STATS_COLUMNS,
   StatsTableKind,
 } from "../../client/StatsConstants";
-// DesktopShell.ts imports nothing, so this cannot introduce an import cycle
-// (verified with madge: 58 cycles before and after, none involving it).
-import { isDesktopShell } from "../../client/DesktopShell";
 import { Cosmetics } from "../CosmeticSchemas";
 import { PlayerPattern } from "../Schemas";
 
@@ -150,13 +147,6 @@ const AUDIO_RESET_KEYS: readonly string[] = [
  */
 const AUDIO_RESET_VERSION = 1;
 const AUDIO_RESET_VERSION_KEY = "settings.audio.resetVersion";
-
-/** Every key that means "this player has chosen an audio volume before". */
-const AUDIO_VOLUME_KEYS: readonly string[] = [
-  "settings.backgroundMusicVolume",
-  "settings.soundEffectsVolume",
-  ...AUDIO_CHANNELS.map((category) => `settings.audio.${category}`),
-];
 
 const AUDIO_LEGACY_KEY: Partial<Record<AudioCategory, string>> = {
   music: "settings.backgroundMusicVolume",
@@ -828,24 +818,16 @@ export class UserSettings {
    * What master falls back to with nothing stored for it.
    *
    * The desktop shell is a game the player deliberately launched, so it starts
-   * audible. The web build starts silent, matching main today — both of the
-   * old sliders defaulted to 0, and audio that starts by itself on the web is
-   * bad manners besides.
-   *
-   * The carve-out: master has no legacy key of its own, so defaulting it to 0
-   * would silence a returning player who had deliberately set the old
-   * sliders. If any audio value is stored at all, master falls back to
-   * AUDIO_DEFAULTS.master and that player keeps hearing what they chose.
-   *
-   * Named rather than quoted, here and in setAudioVolume below, so the two
-   * cannot drift apart the next time the default moves.
+   * audible. The web build used to start silent, matching main — but on the
+   * self-host that reads as broken: the sliders move with no sound and the
+   * Test buttons sit disabled (isAudible() is false at master 0), so players
+   * conclude audio doesn't work at all. Start audible everywhere; a stored 0
+   * is still respected as a deliberate mute.
    */
   private defaultMasterVolume(): number {
-    if (isDesktopShell()) return AUDIO_DEFAULTS.master;
-    const chosenBefore = AUDIO_VOLUME_KEYS.some(
-      (key) => this.getCached(key) !== null,
-    );
-    return chosenBefore ? AUDIO_DEFAULTS.master : 0;
+    // Self-host: start audible even for first-run web players. A deliberate
+    // mute is a stored 0, which audioVolume() still respects.
+    return AUDIO_DEFAULTS.master;
   }
 
   audioVolume(category: AudioCategory): number {
@@ -864,20 +846,7 @@ export class UserSettings {
   }
 
   setAudioVolume(category: AudioCategory, volume: number): void {
-    // Writing any channel can flip the web master carve-out from 0 to
-    // AUDIO_DEFAULTS.master (see defaultMasterVolume): the player now has a
-    // stored audio value. Nothing else would announce that, so the mixer
-    // would sit at master 0 — a silent game — while the tab showed the
-    // default.
-    const masterBefore = this.audioVolume("master");
     this.setFloat(`settings.audio.${category}`, clampVolume(volume));
-    if (category === "master") return;
-    // A stored master is authoritative; the carve-out cannot apply.
-    if (this.getCached("settings.audio.master") !== null) return;
-    const masterAfter = this.audioVolume("master");
-    if (masterAfter !== masterBefore) {
-      this.emitChange("settings.audio.master", String(masterAfter));
-    }
   }
 
   muteOnBlur(): boolean {
@@ -897,8 +866,8 @@ export class UserSettings {
 
   /**
    * Back to the fresh-install state for this platform: every stored audio key
-   * is dropped, including the legacy pair, so the defaults and the master
-   * carve-out resolve against nothing.
+   * is dropped, including the legacy pair, so the defaults resolve against
+   * nothing.
    *
    * The change events carry the value each key now *resolves to*, not null.
    * The mixer's listener parses `detail` as a number and ignores NaN, so a

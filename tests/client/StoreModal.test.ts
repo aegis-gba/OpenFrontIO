@@ -657,155 +657,74 @@ describe("StoreModal cosmetic browser", () => {
     expect(dialog()).toBeTruthy();
   });
 
-  it("uses the browser shell and exact resolved pack purchase", async () => {
-    resolvedCatalog = [pack];
-    const modal = await openStoreOnTab("packs");
-
-    expect(modal.querySelector("[data-store-browser]")).toBeTruthy();
-    expect(modal.querySelector("[data-store-grid]")).toBeTruthy();
-    expect(modal.querySelector("[data-store-grid] custom-currency-card")).toBe(
-      modal.querySelector("custom-currency-card"),
-    );
-    expect(modal.querySelector("[data-store-grid]")?.className).toMatch(
-      /flex-wrap/,
-    );
-    for (const el of [
-      card(modal, pack.key),
-      modal.querySelector("custom-currency-card"),
-    ]) {
-      // Half-width (minus the gap) below sm so phones fit two per row, as the
-      // cosmetics and effects grids already do; a fixed w-48 from sm up.
-      expect(el?.className).toContain("w-[calc(50%-0.5rem)]");
-      expect(el?.className).toContain("sm:w-48");
-      expect(el?.className).not.toMatch(/h-full/);
-    }
-    expect(card(modal, pack.key)?.state).toBe("focused");
-    expect(purchaseButton(modal, pack.key).closest("cosmetic-card")).toBe(
-      card(modal, pack.key),
-    );
-
-    await purchaseButton(modal, pack.key).onPurchaseDollar!();
-
-    expect(purchaseCosmetic).toHaveBeenCalledWith(pack, "dollar");
-  });
-
-  it("keeps each currency on its own line across mixed-payment cards", async () => {
-    const hardPack: ResolvedCosmetic = {
-      ...pack,
-      cosmetic: {
-        ...(pack.cosmetic as object),
-        name: "hard-only",
-        displayName: "500 Plutonium",
-        product: null,
-        priceHard: 500,
-      } as never,
-      key: "pack:hard-only",
+  // Self-host: the store is free, so the packs and subscriptions tabs are not
+  // offered — they only sold Stripe products. The tab keys come from
+  // modalConfig() and are handed to <o-modal>, which renders the tab bar.
+  function modalTabKeys(): string[] {
+    const omodal = store!.querySelector("o-modal") as unknown as {
+      tabs?: { key: string }[];
     };
-    resolvedCatalog = [pack, hardPack];
-    const modal = await openStoreOnTab("packs");
+    return (omodal?.tabs ?? []).map((tab) => tab.key);
+  }
 
-    const lines = (key: string) =>
-      [
-        ...purchaseButton(modal, key).querySelectorAll(
-          ".flex.flex-col > button, .flex.flex-col > span",
-        ),
-      ].map((el) =>
-        el.tagName === "SPAN"
-          ? "reserved"
-          : el.className.includes("-hard")
-            ? "hard"
-            : "dollar",
-      );
+  it("hides the packs and subscriptions tabs from the tab bar", async () => {
+    store = document.createElement("store-modal") as StoreModal;
+    store.inline = true;
+    document.body.appendChild(store);
+    await store.updateComplete;
+    store.open();
+    await store.updateComplete;
 
-    // The dollar-only pack holds the plutonium line open and vice versa, so
-    // both cards put the same currency at the same height.
-    expect(lines(pack.key)).toEqual(["dollar", "reserved"]);
-    expect(lines(hardPack.key)).toEqual(["reserved", "hard"]);
+    expect(modalTabKeys()).toEqual([
+      "bundles",
+      "cosmetics",
+      "effects",
+      "tribes",
+    ]);
   });
 
-  it("shows subscription status and a switch action for another tier", async () => {
+  // The base modal validates a requested tab against the tab bar, so even a
+  // programmatic open({ tab: "packs" }) falls back to the default tab: the
+  // currency-pack purchase path is unreachable, not just unlisted.
+  it("ignores programmatic opens of the packs tab", async () => {
+    resolvedCatalog = [{ ...pack, relationship: "blocked" }];
+    store = document.createElement("store-modal") as StoreModal;
+    store.inline = true;
+    document.body.appendChild(store);
+    await store.updateComplete;
+    store.open({ tab: "packs" });
+    await store.updateComplete;
+
+    expect(modalTabKeys()).toEqual([
+      "bundles",
+      "cosmetics",
+      "effects",
+      "tribes",
+    ]);
+    expect(store.querySelector("custom-currency-card")).toBeNull();
+    expect(store.querySelector("purchase-button")).toBeNull();
+    expect(purchaseCosmetic).not.toHaveBeenCalled();
+  });
+
+  // Self-host: subscriptions are not sold and the tab is not offered, so even
+  // a programmatic open falls back to the default tab with no buy controls.
+  it("ignores programmatic opens of the subscriptions tab", async () => {
     resolvedCatalog = [goldSubscription, platinumSubscription];
-    const modal = await openStoreOnTab("subscriptions");
-    await modal.onUserMe({
-      player: { subscription: { tier: "gold" } },
-    } as never);
-    await modal.updateComplete;
+    store = document.createElement("store-modal") as StoreModal;
+    store.inline = true;
+    document.body.appendChild(store);
+    await store.updateComplete;
+    store.open({ tab: "subscriptions" });
+    await store.updateComplete;
 
-    const grid = modal.querySelector<HTMLElement>("[data-store-grid]")!;
-    expect(grid.className).toMatch(/flex-wrap/);
-    expect(grid.className).toMatch(/justify-center/);
-    expect(grid.className).toMatch(/p-8/);
-    expect(card(modal, goldSubscription.key)?.className).toContain(
-      "w-[calc(50%-0.5rem)]",
-    );
-    expect(card(modal, goldSubscription.key)?.className).toContain("sm:w-48");
-    // h-full resolves against the whole wrapping flex container, so a card
-    // would grow to the height of every row stacked — the phone layout.
-    expect(card(modal, goldSubscription.key)?.className).not.toMatch(/h-full/);
-
-    const status = product(modal, goldSubscription.key)?.querySelector(
-      "[data-store-status]",
-    );
-    expect(status?.textContent).toContain("store.subscribed");
-    // Same box as the other tiers' switch button, not a small tag off to one
-    // side: full width, a button's height and a button's type size.
-    expect(status?.className).toContain("w-full");
-    expect(status?.className).toContain("min-h-11");
-    expect(status?.className).toContain("text-base");
-
-    await focusCard(modal, platinumSubscription.key);
-    const switchButton = purchaseButton(modal, platinumSubscription.key);
-    expect(switchButton.dollarLabelKey).toBe("store.switch_button");
-
-    await switchButton.onPurchaseDollar!();
-    expect(purchaseCosmetic).toHaveBeenCalledWith(
-      platinumSubscription,
-      "dollar",
-    );
-  });
-
-  // OPE-440. A grant (`provider: null`) is free access nobody is billing, so
-  // the player is not switching anything — every tier, the one their grant
-  // confers included, is a first purchase. resolveCosmetics is what stops
-  // calling the granted tier "owned" (covered in
-  // GrantedSubscriptionPurchase.test.ts); what this asserts is the store's
-  // half: a purchasable tier renders its buy button and no dead status box,
-  // and the "Switch" label is not applied to a granted player.
-  it("offers a plain buy button on every tier to a granted subscriber", async () => {
-    resolvedCatalog = [
-      { ...goldSubscription, relationship: "purchasable" },
-      platinumSubscription,
-    ];
-    const modal = await openStoreOnTab("subscriptions");
-    await modal.onUserMe({
-      player: {
-        subscription: { tier: "gold", provider: null },
-      },
-    } as never);
-    await modal.updateComplete;
-
-    // The "Subscribed" box was the whole bug: it replaced the buy button.
-    expect(
-      product(modal, goldSubscription.key)?.querySelector(
-        "[data-store-status]",
-      ),
-    ).toBeFalsy();
-
-    const gold = purchaseButton(modal, goldSubscription.key);
-    expect(gold.onPurchaseDollar).toBeTypeOf("function");
-    expect(gold.dollarLabelKey).toBe("");
-
-    await focusCard(modal, platinumSubscription.key);
-    // Not "Switch": there is no paid plan to switch away from.
-    expect(purchaseButton(modal, platinumSubscription.key).dollarLabelKey).toBe(
-      "",
-    );
-
-    await gold.onPurchaseDollar!();
-    expect(purchaseCosmetic).toHaveBeenCalledWith(
-      { ...goldSubscription, relationship: "purchasable" },
-      "dollar",
-    );
+    expect(modalTabKeys()).toEqual([
+      "bundles",
+      "cosmetics",
+      "effects",
+      "tribes",
+    ]);
+    expect(store.querySelector("purchase-button")).toBeNull();
+    expect(purchaseCosmetic).not.toHaveBeenCalled();
   });
 
   it("sells a cosmetic bundle for plutonium with its contents listed", async () => {
@@ -918,17 +837,25 @@ describe("StoreModal cosmetic browser", () => {
     ).toContain("store.pack_partially_owned");
   });
 
-  it("hides a bundle blocked for a reason other than partial ownership", async () => {
-    resolvedCatalog = [{ ...starterBundle, relationship: "blocked" }];
-    store = document.createElement("store-modal") as StoreModal;
-    store.inline = true;
-    document.body.appendChild(store);
-    await store.updateComplete;
-    store.open({ tab: "bundles" });
-    await store.updateComplete;
+  // Self-host: every player owns every cosmetic, so a bundle whose items are
+  // owned is listed with its owned status instead of being hidden — a
+  // "blocked" bundle here is a partially owned one, never a sale the player
+  // can't afford.
+  it("lists a blocked bundle as partially owned when its items are owned", async () => {
+    const partial = {
+      ...starterBundle,
+      relationship: "blocked" as const,
+      key: "cosmeticPack:partial",
+    };
+    resolvedCatalog = [partial];
+    const modal = await openStoreOnTab("bundles");
 
-    expect(store.querySelector("cosmetic-card")).toBeNull();
-    expect(store.textContent).toContain("store.no_bundles");
+    expect(card(modal, partial.key)).toBeTruthy();
+    expect(modal.querySelector("purchase-button")).toBeNull();
+    expect(
+      product(modal, partial.key)?.querySelector("[data-store-status]")
+        ?.textContent,
+    ).toContain("store.pack_partially_owned");
   });
 
   it("does not leave an inspected non-affiliate item in affiliate mode", async () => {
@@ -949,89 +876,5 @@ describe("StoreModal cosmetic browser", () => {
 
     await purchaseButton(modal, affiliatePattern.key).onPurchaseHard!();
     expect(purchaseCosmetic).toHaveBeenCalledWith(affiliatePattern, "hard");
-  });
-});
-
-// The custom-amount card is sold on both rails since OPE-337: the server
-// accepts custom_currency on Steam, so the card is offered there too.
-describe("StoreModal on the Steam rail", () => {
-  Element.prototype.animate ??= () => ({ cancel: () => {} }) as Animation;
-
-  function installSteamShell() {
-    const microTxn = {
-      subscribe: vi.fn(() => () => {}),
-      consumePending: vi.fn(
-        async (): Promise<
-          { appId: number; orderId: string | null; authorized: boolean }[]
-        > => [],
-      ),
-    };
-    (window as any).openfrontDesktop = { steam: { microTxn } };
-    return microTxn;
-  }
-
-  beforeEach(() => {
-    localStorage.clear();
-    resolvedCatalog = [pack];
-    vi.mocked(fetchCosmetics).mockReset();
-    vi.mocked(fetchCosmetics).mockResolvedValue({} as Cosmetics);
-    vi.mocked(resolveCosmetics).mockReset();
-    vi.mocked(resolveCosmetics).mockImplementation(() => resolvedCatalog);
-    vi.mocked(purchaseCosmetic).mockReset();
-    vi.mocked(purchaseCosmetic).mockResolvedValue(undefined);
-  });
-
-  afterEach(() => {
-    store?.remove();
-    store = undefined;
-    delete (window as any).openfrontDesktop;
-    localStorage.clear();
-  });
-
-  it("offers the custom-amount card on the web", async () => {
-    const modal = await openStoreOnTab("packs");
-    expect(modal.querySelector("custom-currency-card")).toBeTruthy();
-  });
-
-  it("offers the custom-amount card on Steam too", async () => {
-    installSteamShell();
-    const modal = await openStoreOnTab("packs");
-    expect(modal.querySelector("custom-currency-card")).toBeTruthy();
-  });
-
-  // REQUIRED, not an optimisation: the main process parks authorizations and
-  // its "something arrived" nudge is contentless, so one that fires before any
-  // window exists is heard by nobody. subscribe() alone never surfaces it.
-  it("drains parked Steam authorizations every time it opens", async () => {
-    const microTxn = installSteamShell();
-    await openStoreOnTab("packs");
-    await vi.waitFor(() => expect(microTxn.consumePending).toHaveBeenCalled());
-
-    // "Every time", not "once per element". Closing and REOPENING the same
-    // modal has to drain again: an authorization parked while the player had
-    // the store shut is only surfaced by the next open, and a drain wired to
-    // first mount rather than to onOpen would strand it there.
-    const opened = store!;
-    opened.close();
-    await opened.updateComplete;
-    opened.open({ tab: "packs" });
-    await vi.waitFor(() =>
-      expect(microTxn.consumePending).toHaveBeenCalledTimes(2),
-    );
-  });
-
-  it("tells the player about an approval it can no longer finalize", async () => {
-    const microTxn = installSteamShell();
-    microTxn.consumePending.mockResolvedValueOnce([
-      { appId: 480, orderId: "77770000", authorized: true },
-    ]);
-    const seen: string[] = [];
-    const onToast = (e: Event) => seen.push((e as CustomEvent).detail.message);
-    window.addEventListener("show-message", onToast);
-
-    await openStoreOnTab("packs");
-
-    await vi.waitFor(() => expect(seen).toContain("store.purchase_pending"));
-    window.removeEventListener("show-message", onToast);
   });
 });

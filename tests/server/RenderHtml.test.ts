@@ -12,6 +12,14 @@ import {
 } from "../../src/server/RenderHtml";
 import { ServerEnv } from "../../src/server/ServerEnv";
 
+// The asset manifest is a build artifact (static/asset-manifest.json,
+// git-ignored). A production build in this checkout would leak its real
+// contents into the rendered page, so these tests pin it to empty.
+vi.mock("../../src/server/RuntimeAssetManifest", () => ({
+  getRuntimeAssetManifest: vi.fn().mockResolvedValue({}),
+  clearRuntimeAssetManifestCache: vi.fn(),
+}));
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // The identity deploy.sh writes: the tests below boot as letter "a" with one

@@ -877,7 +877,7 @@ describe("InventoryModal", () => {
     expect(localStorage.getItem(EFFECTS_KEY)).toBe(saved.effects);
   });
 
-  it("shows guest country flags without inferring catalog ownership", async () => {
+  it("shows guests every cosmetic: the free store grants all catalog ownership", async () => {
     Object.assign(modal as unknown as Record<string, unknown>, {
       cosmetics: null,
       userMeResponse: false,
@@ -895,12 +895,15 @@ describe("InventoryModal", () => {
         (modal as unknown as { ownershipState: string }).ownershipState,
       ).toBe("guest");
     });
+    // Self-host: guests own every catalog cosmetic, so owned items render.
+    // pattern:default is the implicit default (cosmetic: null) and never
+    // renders as a card — that predates the free store.
     expect(card(modal, "pattern:default")).toBeUndefined();
-    expect(card(modal, "skin:owned_skin")).toBeUndefined();
+    expect(card(modal, "skin:owned_skin")).toBeDefined();
     await showTab(modal, "flags");
     expect(card(modal, "country:xx")).toBeUndefined();
     expect(card(modal, "country:us")).toBeDefined();
-    expect(card(modal, "flag:owned_flag")).toBeUndefined();
+    expect(card(modal, "flag:owned_flag")).toBeDefined();
     expect(vi.mocked(getUserMe)).not.toHaveBeenCalled();
   }, 30_000);
 

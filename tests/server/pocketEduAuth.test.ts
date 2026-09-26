@@ -16,6 +16,7 @@ import {
   verifyPocketEduToken,
 } from "../../src/server/pocketEduAuth";
 import { verifyClientToken } from "../../src/server/jwt";
+import { SELFHOST_FREE_FLARES } from "../../src/server/selfhost";
 
 // ---------------------------------------------------------------------------
 // Pocket Edu authentication tests.
@@ -145,7 +146,10 @@ describe("verifyPocketEduToken", () => {
     const token = await makeToken();
     const parts = token.split(".");
     const sig = parts[2];
-    const flipped = sig.slice(0, -1) + (sig.endsWith("A") ? "B" : "A");
+    // Flip the FIRST character, not the last: the final base64url char of a
+    // 64-byte Ed25519 signature carries only pad bits, so flipping it can
+    // decode to the identical signature and pass verification by luck.
+    const flipped = (sig.startsWith("A") ? "B" : "A") + sig.slice(1);
     const result = await verifyPocketEduToken(
       `${parts[0]}.${parts[1]}.${flipped}`,
     );
@@ -303,7 +307,7 @@ describe("verifyPocketEduToken", () => {
 });
 
 describe("buildPocketEduUserMe", () => {
-  it("produces a schema-valid, honest profile with no entitlements", async () => {
+  it("produces a schema-valid, honest profile with the self-host free grant", async () => {
     const verified = await verifyPocketEduToken(await makeToken());
     expect(verified.ok).toBe(true);
     if (!verified.ok) return;
@@ -320,9 +324,12 @@ describe("buildPocketEduUserMe", () => {
     expect(profile!.player.canCreatePublicLobbies).toBe(false);
     expect(profile!.player.friends).toEqual([]);
     expect(profile!.player.subscription).toBeNull();
-    // No purchased cosmetics, currency, rankings, clans or achievements.
+    // Self-host: the store is free, so every account owns every cosmetic.
+    // The flares below are the actual self-host grant (see src/server/selfhost),
+    // not a fabricated purchase; no currency, rankings, clans or
+    // achievements are invented.
+    expect(profile!.player.flares).toEqual([...SELFHOST_FREE_FLARES]);
     const rawPlayer = profile!.player as unknown as Record<string, unknown>;
-    expect(rawPlayer.flares).toBeUndefined();
     expect(rawPlayer.leaderboard).toBeUndefined();
     expect(rawPlayer.clan).toBeUndefined();
   });

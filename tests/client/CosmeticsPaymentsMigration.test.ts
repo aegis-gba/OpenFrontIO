@@ -90,10 +90,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("resolveCosmetics: currency packs no longer gate on the Stripe product", () => {
-  // OPE-231 bug 1: `pack.product ? "purchasable" : "blocked"` rendered every
-  // Steam-only pack as blocked, so its buy button never appeared.
-  it("marks a Steam-only pack (product: null) purchasable", () => {
+describe("resolveCosmetics: currency packs are blocked on the self-host", () => {
+  // Self-host: there is no payment rail, so every currency pack (Steam-only
+  // or Stripe-backed) resolves as blocked — nothing can be bought for real
+  // money. The store hides the packs tab entirely.
+  it("marks a Steam-only pack (product: null) blocked", () => {
     const cosmetics = {
       patterns: {},
       flags: {},
@@ -105,10 +106,10 @@ describe("resolveCosmetics: currency packs no longer gate on the Stripe product"
     const pack = items.find((i) => i.key === "pack:starter_pack");
 
     expect(pack).toBeDefined();
-    expect(pack!.relationship).toBe("purchasable");
+    expect(pack!.relationship).toBe("blocked");
   });
 
-  it("still marks a Stripe-backed pack purchasable", () => {
+  it("marks a Stripe-backed pack blocked", () => {
     const cosmetics = {
       patterns: {},
       flags: {},
@@ -119,7 +120,7 @@ describe("resolveCosmetics: currency packs no longer gate on the Stripe product"
     const pack = resolveCosmetics(cosmetics, false, null).find(
       (i) => i.key === "pack:starter_pack",
     );
-    expect(pack!.relationship).toBe("purchasable");
+    expect(pack!.relationship).toBe("blocked");
   });
 });
 
