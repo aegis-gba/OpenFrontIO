@@ -316,9 +316,10 @@ describe("buildPocketEduUserMe", () => {
     expect(profile!.player.friends).toEqual([]);
     expect(profile!.player.subscription).toBeNull();
     // No purchased cosmetics, currency, rankings, clans or achievements.
-    expect(profile!.player.flares).toBeUndefined();
-    expect(profile!.player.leaderboard).toBeUndefined();
-    expect(profile!.player.clan).toBeUndefined();
+    const rawPlayer = profile!.player as unknown as Record<string, unknown>;
+    expect(rawPlayer.flares).toBeUndefined();
+    expect(rawPlayer.leaderboard).toBeUndefined();
+    expect(rawPlayer.clan).toBeUndefined();
   });
 });
 
