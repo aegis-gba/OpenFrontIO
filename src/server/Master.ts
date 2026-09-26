@@ -24,6 +24,11 @@ import { MapPlaylist } from "./MapPlaylist";
 import { MasterLobbyService } from "./MasterLobbyService";
 import { setNoStoreHeaders } from "./NoStoreHeaders";
 import { startPolling } from "./PollingLoop";
+import {
+  buildPocketEduUserMe,
+  isPocketEduToken,
+  verifyPocketEduToken,
+} from "./pocketEduAuth";
 import { renderAppShell } from "./RenderHtml";
 import { ServerEnv } from "./ServerEnv";
 import { applyStaticAssetCacheControl } from "./StaticAssetCache";
@@ -149,6 +154,46 @@ app.get(
 app.use("/api", (_req, res, next) => {
   setNoStoreHeaders(res);
   next();
+});
+
+// ---------------------------------------------------------------------------
+// Account profile for verified Pocket Edu accounts.
+//
+// The client calls GET /users/@me with `Authorization: Bearer <token>`.
+// Valid Pocket Edu tokens get an honest, locally-built profile: this
+// self-host has no store, subscriptions, rankings, achievements or clans,
+// so the response says exactly that (empty collections, nulls, false)
+// instead of fabricating official-account data. Guests and invalid/expired
+// account tokens get 401 — an expired token is never downgraded to a guest
+// identity; the frontend fetches a fresh token and retries.
+//
+// Responses carry no-store: profile and authentication data must never be
+// cached.
+// ---------------------------------------------------------------------------
+app.get("/users/@me", async (req, res) => {
+  setNoStoreHeaders(res);
+  const header = req.headers.authorization;
+  const token =
+    typeof header === "string" && header.startsWith("Bearer ")
+      ? header.slice("Bearer ".length)
+      : null;
+  if (!token || !isPocketEduToken(token)) {
+    res.status(401).json({ error: "no session" });
+    return;
+  }
+  const verified = await verifyPocketEduToken(token);
+  if (!verified.ok) {
+    // Token claims this issuer but does not verify (bad signature, expired,
+    // wrong key, ...). 401, not a guest profile: fail closed.
+    res.status(401).json({ error: "invalid session" });
+    return;
+  }
+  const profile = buildPocketEduUserMe(verified.identity);
+  if (!profile) {
+    res.status(500).json({ error: "profile unavailable" });
+    return;
+  }
+  res.json(profile);
 });
 
 // Start the master process

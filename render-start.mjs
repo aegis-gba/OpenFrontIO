@@ -1,13 +1,21 @@
 import http from 'node:http';
 import net from 'node:net';
 import zlib from 'node:zlib';
-import { spawn } from 'node:child_process';
+import { spawn, execSync } from 'node:child_process';
+
+// Report the actually-deployed commit so the client/server version check
+// compares the real build on both sides (both read this same value).
+let GIT_COMMIT = 'DEV';
+try {
+  const head = execSync('git rev-parse --short HEAD', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  if (/^[0-9a-f]+$/.test(head)) GIT_COMMIT = head;
+} catch {}
 
 // One public listener routes the upstream master and one game worker.
 const child = spawn(process.execPath, ['--import', 'tsx', 'src/server/Server.ts'], {
   stdio: 'inherit',
   env: { ...process.env, GAME_ENV: 'dev', DOMAIN: 'localhost', NUM_WORKERS: '1',
-    INSTANCE_LETTER: 'a', GIT_COMMIT: '38cd12d4043ce6e700fc31da29dd1be39dc67879',
+    INSTANCE_LETTER: 'a', GIT_COMMIT,
     TURNSTILE_SITE_KEY: '1x00000000000000000000AA', ADMIN_BOT_API_KEY: '',
     SUBDOMAIN: '', GAME_HOST: '', SITE_HOST: '', LOBBY_COORDINATOR: 'off' },
 });
@@ -31,15 +39,28 @@ const PUBLIC_ORIGIN = 'https://openfront-friends.onrender.com';
 // the cluster map injected into the page.
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
-// CORS for alternate frontends (e.g. a static copy of this client hosted on
-// Netlify). The game sends no cookies — the play token travels in the
-// Authorization header — so reflecting the requesting origin is sufficient.
-// Preflights are answered here; the upstream game server allowlists only its
-// own hosts and would otherwise omit the grant headers.
+// CORS for the exact frontend origins that embed or host this client.
+// Only requests whose Origin matches the allowlist get CORS grants; the
+// game sends no cookies (the play token travels in the Authorization
+// header), so no credentials are involved. Add further frontend origins via
+// the ALLOWED_CORS_ORIGINS environment variable (comma-separated) instead
+// of editing this file. Preflights are answered here; the upstream game
+// server allowlists only its own hosts and would otherwise omit the grant
+// headers.
 // ---------------------------------------------------------------------------
+const DEFAULT_ALLOWED_CORS_ORIGINS = [
+  'https://openfront-friends.onrender.com', // this deployment itself
+  'https://pocket-edu-openfront.netlify.app', // Pocket Edu game frontend
+];
+const ALLOWED_CORS_ORIGINS = new Set(
+  (process.env.ALLOWED_CORS_ORIGINS || DEFAULT_ALLOWED_CORS_ORIGINS.join(','))
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
+);
 function corsHeaders(req) {
   const origin = req.headers.origin;
-  if (!origin) return {};
+  if (!origin || !ALLOWED_CORS_ORIGINS.has(origin)) return {};
   return {
     'access-control-allow-origin': origin,
     'vary': 'Origin',
@@ -67,7 +88,10 @@ function apiStub(req, res) {
     '/cosmetics.json': [200, []],
     '/reserved_clan_tags': [200, []],
     '/marketing/consent': [200, {}],
-    '/users/@me': [401, { error: 'no session' }],
+    // NOTE: '/users/@me' is intentionally NOT stubbed here. It routes to the
+    // game server, which answers it for verified Pocket Edu accounts and
+    // 401s everyone else. Keep it no-store: profile/auth responses must
+    // never be cached.
   };
   const hit = stubs[path];
   if (!hit) return false;
