@@ -12,6 +12,7 @@ import { ServerEnv } from "./ServerEnv";
 import { logger } from "./Logger";
 import {
   buildPocketEduUserMe,
+  deriveGuestPersistentId,
   isPocketEduToken,
   verifyPocketEduToken,
 } from "./pocketEduAuth";
@@ -36,13 +37,16 @@ export async function verifyClientToken(
 ): Promise<TokenVerificationResult> {
   if (PersistentIdSchema.safeParse(token).success) {
     if (ServerEnv.env() === GameEnv.Dev) {
-      // Guest identity. Pocket Edu account identities are HMAC-derived
-      // (see pocketEduAuth.ts) and can never equal a guest-supplied UUID,
-      // so presenting an account's subject UUID here yields a *different*
-      // identity — it cannot impersonate the account.
+      // Guest identity. The raw token is NEVER used as an identity: it is
+      // mapped through the guest namespace first (see pocketEduAuth.ts).
+      // That keeps the guest namespace disjoint from the account and
+      // public namespaces, so presenting an account's subject UUID — or
+      // its public profile id — as a guest token yields a *different*
+      // identity and can never impersonate the account, reclaim its
+      // player seat, or pass its lobby-ownership checks.
       return {
         type: "success",
-        persistentId: token,
+        persistentId: deriveGuestPersistentId(token),
         claims: null,
         provider: "guest",
       };

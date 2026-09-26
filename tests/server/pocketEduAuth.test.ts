@@ -10,6 +10,8 @@ import {
   _resetPocketEduJwksCacheForTests,
   buildPocketEduUserMe,
   deriveAccountPersistentId,
+  deriveAccountPublicId,
+  deriveGuestPersistentId,
   isPocketEduToken,
   verifyPocketEduToken,
 } from "../../src/server/pocketEduAuth";
@@ -117,9 +119,9 @@ describe("verifyPocketEduToken", () => {
     expect(id1.accountUuid).toBe(ACCOUNT_UUID);
     expect(id1.displayName).toBe("Test Player");
     expect(id1.claims.provider).toBe("pocketedu");
-    // UUID-shaped but not the account UUID itself.
+    // UUIDv5-shaped but not the account UUID itself.
     expect(id1.persistentId).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
     expect(id1.persistentId).not.toBe(ACCOUNT_UUID);
 
@@ -308,7 +310,10 @@ describe("buildPocketEduUserMe", () => {
     const profile = buildPocketEduUserMe(verified.identity);
     expect(profile).not.toBeNull();
     expect(UserMeResponseSchema.safeParse(profile).success).toBe(true);
-    expect(profile!.player.publicId).toBe(verified.identity.persistentId);
+    // The profile exposes the account's *public* id, which is separate
+    // from its authentication identity (persistentId).
+    expect(profile!.player.publicId).toBe(deriveAccountPublicId(ACCOUNT_UUID));
+    expect(profile!.player.publicId).not.toBe(verified.identity.persistentId);
     expect(profile!.player.username).toBe("Test Player");
     expect(profile!.player.adfree).toBe(false);
     expect(profile!.player.unlimitedRanked).toBe(false);
@@ -344,14 +349,99 @@ describe("verifyClientToken routing", () => {
   });
 
   it("does not let a guest UUID impersonate a Pocket Edu account", async () => {
-    // Under dev (the vitest default) a raw UUID is accepted as a guest.
+    // Under dev (the vitest default) a raw UUID is accepted as a guest,
+    // but the raw token is mapped through the guest namespace first.
     const guest = await verifyClientToken(ACCOUNT_UUID);
     expect(guest.type).toBe("success");
     if (guest.type !== "success") return;
     expect(guest.provider).toBe("guest");
-    expect(guest.persistentId).toBe(ACCOUNT_UUID);
-    // The account's in-game identity is the HMAC-derived id, never the raw
-    // subject UUID, so the guest and the account are different players.
+    expect(guest.persistentId).toBe(deriveGuestPersistentId(ACCOUNT_UUID));
+    // The account's in-game identity lives in a different namespace, so
+    // the guest and the account are different players.
     expect(guest.persistentId).not.toBe(deriveAccountPersistentId(ACCOUNT_UUID));
+  });
+});
+
+describe("identity namespaces (regression)", () => {
+  // Fixed vectors pin the derivation permanently: the mapping is a pure
+  // function of the namespace constants, so one signed account gets the
+  // same identity in the adapter, the master, every worker, replacement
+  // workers, and across restarts. If these vectors ever change, every
+  // identity reassigns — that must be a deliberate migration, never an
+  // accident.
+  it("matches fixed cross-process test vectors", () => {
+    expect(deriveAccountPersistentId(ACCOUNT_UUID)).toBe(
+      "a2dcd68b-9384-5d39-9efa-198e7d5eea37",
+    );
+    expect(deriveAccountPublicId(ACCOUNT_UUID)).toBe(
+      "5faf33e7-0919-59b8-a99b-05c41e8113b5",
+    );
+    expect(deriveGuestPersistentId(ACCOUNT_UUID)).toBe(
+      "589f4cf5-b4c9-5086-bd78-366ed6b3ab25",
+    );
+  });
+
+  it("keeps the three namespaces disjoint for the same input", () => {
+    const account = deriveAccountPersistentId(ACCOUNT_UUID);
+    const pub = deriveAccountPublicId(ACCOUNT_UUID);
+    const guest = deriveGuestPersistentId(ACCOUNT_UUID);
+    // account != public != guest != raw input, all four distinct.
+    expect(new Set([account, pub, guest, ACCOUNT_UUID]).size).toBe(4);
+    // Input case is normalized.
+    expect(deriveAccountPersistentId(ACCOUNT_UUID.toUpperCase())).toBe(account);
+    expect(deriveGuestPersistentId(ACCOUNT_UUID.toUpperCase())).toBe(guest);
+    expect(deriveAccountPublicId(ACCOUNT_UUID.toUpperCase())).toBe(pub);
+  });
+
+  it("derives a stable guest identity for the same raw token", async () => {
+    const raw = randomUUID();
+    const first = await verifyClientToken(raw);
+    const second = await verifyClientToken(raw);
+    expect(first.type).toBe("success");
+    expect(second.type).toBe("success");
+    if (first.type !== "success" || second.type !== "success") return;
+    expect(first.provider).toBe("guest");
+    expect(first.persistentId).toBe(deriveGuestPersistentId(raw));
+    expect(second.persistentId).toBe(first.persistentId);
+  });
+
+  it("does not let a guest presenting an account's publicId become the account", async () => {
+    const publicId = deriveAccountPublicId(ACCOUNT_UUID);
+    const guest = await verifyClientToken(publicId);
+    expect(guest.type).toBe("success");
+    if (guest.type !== "success") return;
+    expect(guest.provider).toBe("guest");
+    // Mapped through the guest namespace: a different identity that is
+    // neither the account's auth identity nor usable as the publicId.
+    expect(guest.persistentId).toBe(deriveGuestPersistentId(publicId));
+    expect(guest.persistentId).not.toBe(deriveAccountPersistentId(ACCOUNT_UUID));
+    expect(guest.persistentId).not.toBe(publicId);
+  });
+
+  it("gives a reconnecting account the same identity as its first session", async () => {
+    // Fresh tokens (new jti/iat/exp) for the same account — e.g. a page
+    // refresh after the 300s token expired — must map to the same
+    // persistentId so rejoin and lobby-creator checks keep working.
+    const first = await verifyClientToken(await makeToken());
+    const second = await verifyClientToken(await makeToken());
+    expect(first.type).toBe("success");
+    expect(second.type).toBe("success");
+    if (first.type !== "success" || second.type !== "success") return;
+    expect(first.persistentId).toBe(second.persistentId);
+    expect(first.persistentId).toBe(deriveAccountPersistentId(ACCOUNT_UUID));
+  });
+
+  it("keeps different accounts distinct in every namespace", async () => {
+    const a = await verifyPocketEduToken(await makeToken());
+    const b = await verifyPocketEduToken(
+      await makeToken({ sub: uuidToBase64url(OTHER_UUID) }),
+    );
+    expect(a.ok).toBe(true);
+    expect(b.ok).toBe(true);
+    if (!a.ok || !b.ok) return;
+    expect(a.identity.persistentId).not.toBe(b.identity.persistentId);
+    expect(deriveAccountPublicId(ACCOUNT_UUID)).not.toBe(
+      deriveAccountPublicId(OTHER_UUID),
+    );
   });
 });

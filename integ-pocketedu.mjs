@@ -162,6 +162,37 @@ r = await req("POST", "/w0/api/create_game", {
 });
 check("POST create_game as guest still works", r.status === 200, `got ${r.status} ${r.text.slice(0, 160)}`);
 
+// ---- Lobby ownership: raw subject UUID / publicId must not reclaim it ----
+// gameId is the account's lobby. Attackers presenting the account's raw
+// subject UUID or its public profile id as guest tokens must fail the
+// creator check (403); the real account (fresh token) must pass (200).
+const attackerBody = JSON.stringify({});
+r = await req("POST", `/w0/api/create_game?previous=${gameId}`, {
+  headers: { authorization: `Bearer ${ACCOUNT_UUID}`, "content-type": "application/json" },
+  body: attackerBody,
+});
+check("guest with account's raw subject UUID cannot spawn successor lobby (403)",
+  r.status === 403 && r.text.includes("Only the lobby creator"), `got ${r.status} ${r.text.slice(0, 160)}`);
+
+r = await req("POST", `/w0/api/create_game?previous=${gameId}`, {
+  headers: { authorization: `Bearer ${profile?.player?.publicId}`, "content-type": "application/json" },
+  body: attackerBody,
+});
+check("guest with account's publicId cannot spawn successor lobby (403)",
+  r.status === 403 && r.text.includes("Only the lobby creator"), `got ${r.status} ${r.text.slice(0, 160)}`);
+
+const freshToken = await makeToken(privateKey);
+r = await req("POST", `/w0/api/create_game?previous=${gameId}`, {
+  headers: { authorization: `Bearer ${freshToken}`, "content-type": "application/json" },
+  body: attackerBody,
+});
+check("account (fresh token) can spawn successor lobby for its own game (200)",
+  r.status === 200, `got ${r.status} ${r.text.slice(0, 160)}`);
+
+const publicIdBeforeRestart = profile?.player?.publicId;
+check("publicId matches fixed cross-process vector",
+  publicIdBeforeRestart === "5faf33e7-0919-59b8-a99b-05c41e8113b5", String(publicIdBeforeRestart));
+
 // ---- CORS ----
 const NETLIFY_ORIGIN = "https://pocket-edu-openfront.netlify.app";
 r = await req("GET", "/users/@me", { headers: { origin: NETLIFY_ORIGIN } });
@@ -183,6 +214,29 @@ r = await req("OPTIONS", "/users/@me", { headers: { origin: "https://evil.test" 
 check("preflight for unlisted origin -> no grant", !("access-control-allow-origin" in r.headers));
 
 await kill(app);
+
+// ---- Phase 1b: restart with JWKS still up — identity must be stable ----
+// A brand-new server process (new boot, new module state) must derive the
+// same identity for the same account, even for a freshly-issued token.
+const appRestart = startApp();
+check("app reboots with JWKS available", await waitForApp(appRestart));
+
+const restartToken = await makeToken(privateKey);
+r = await req("GET", "/users/@me", { headers: { authorization: `Bearer ${restartToken}` } });
+let profileAfter = null;
+try { profileAfter = JSON.parse(r.text); } catch {}
+check("same account after restart -> 200", r.status === 200, `got ${r.status} ${r.text.slice(0, 120)}`);
+check("publicId identical across restart (stable cross-process identity)",
+  profileAfter?.player?.publicId === publicIdBeforeRestart,
+  `before=${publicIdBeforeRestart} after=${profileAfter?.player?.publicId}`);
+
+r = await req("POST", "/w0/api/create_game", {
+  headers: { authorization: `Bearer ${restartToken}`, "content-type": "application/json" },
+  body: JSON.stringify({}),
+});
+check("account create_game works after restart", r.status === 200, `got ${r.status} ${r.text.slice(0, 120)}`);
+
+await kill(appRestart);
 
 // ---- Phase 2: JWKS unreachable — server must still start and serve guests ----
 await new Promise((resolve) => jwksServer.close(resolve));

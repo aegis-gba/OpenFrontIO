@@ -1,4 +1,3 @@
-import { createHmac, randomBytes } from "crypto";
 import { importJWK, jwtVerify, type JWK } from "jose";
 import { z } from "zod";
 import {
@@ -8,6 +7,18 @@ import {
   UserMeResponseSchema,
 } from "../core/ApiSchemas";
 import { logger } from "./Logger";
+import {
+  deriveAccountPersistentId,
+  deriveAccountPublicId,
+} from "./identityNamespaces";
+
+// Re-exported so existing importers keep working; the canonical home of
+// these pure functions is ./identityNamespaces (no server dependencies).
+export {
+  deriveAccountPersistentId,
+  deriveAccountPublicId,
+  deriveGuestPersistentId,
+} from "./identityNamespaces";
 
 const log = logger.child({ comp: "pocketedu-auth" });
 
@@ -25,15 +36,24 @@ const log = logger.child({ comp: "pocketedu-auth" });
 //   public JWKS from the explicitly configured POCKET_EDU_AUTH_JWKS_URL.
 //   Token-supplied `jku`/`x5u` header fields are never read, let alone
 //   fetched.
-// - A verified account's in-game persistent id is NOT the raw account UUID.
-//   It is HMAC-SHA256 keyed by a per-process boot secret, formatted as a
-//   UUID. A guest who presents an account's subject UUID as a raw guest
-//   token therefore gets a *different* identity and can never impersonate
-//   the account, take its lobby seat, or read its account data — even for
-//   accounts this process has never seen and even across restarts.
-//   The boot secret is random per process, never logged, never exposed.
-//   Identity is stable for the lifetime of the server process; lobbies and
-//   games do not survive a restart either, so nothing outlives it.
+// - Identity is derived deterministically from the verified `sub` claim
+//   through three *separate* namespaces, so it is identical in the adapter,
+//   the master, every worker, replacement workers, and across restarts:
+//     * ACCOUNT_NAMESPACE: the account's authentication identity
+//       (persistentId). Only a valid Pocket Edu JWT for that account can
+//       ever produce it; it is never exposed to clients.
+//     * PUBLIC_NAMESPACE: the account's public profile id (publicId in
+//       /users/@me and lobby player lists). Visible to other players, but
+//       presenting it as a guest token runs it through the guest namespace
+//       and yields a different identity, so it can never authenticate.
+//     * GUEST_NAMESPACE: every raw guest UUID is mapped through this
+//       namespace before use. A guest presenting an account's raw subject
+//       UUID — or its publicId — as their token therefore gets a *guest*
+//       identity that is different from the account's, and can never
+//       reclaim the account's player seat, lobby ownership, or data.
+//   Hashing alone does not separate these; the distinct fixed namespaces
+//   do. The namespaces are constants: changing them would reassign every
+//   identity, so they must never change.
 // - Verification failures are fail-closed: an invalid, expired or
 //   unverifiable account token is rejected, never downgraded to a guest.
 // - JWKS fetching is bounded (timeout + response size cap), cached with a
@@ -227,8 +247,10 @@ export interface PocketEduIdentity {
   // The signed display name (`name` claim). Surfaced in /users/@me; never
   // used to link or identify accounts server-side.
   displayName: string;
-  // The in-game identity: HMAC-derived from accountUuid, UUID-shaped,
-  // stable for the process lifetime, unguessable without the boot secret.
+  // The in-game authentication identity: derived deterministically from
+  // accountUuid through ACCOUNT_NAMESPACE (see deriveAccountPersistentId).
+  // Identical in every process and across restarts; never exposed to
+  // clients. Only a valid Pocket Edu JWT can produce it.
   persistentId: string;
   // The validated token payload (sub already transformed to UUID string).
   claims: TokenPayload;
@@ -238,30 +260,9 @@ export type PocketEduVerifyResult =
   | { ok: true; identity: PocketEduIdentity }
   | { ok: false; reason: string };
 
-// Per-process boot secret for account identity derivation. Random every
-// boot; never persisted, never logged, never sent anywhere.
-const bootSecret = randomBytes(32);
-
-/**
- * Derive the in-game persistent id for a verified Pocket Edu account.
- * UUID-shaped (so existing UUID-typed fields keep validating), deterministic
- * per boot, and unforgeable: without the boot secret nobody can compute the
- * id for a given account UUID, so a guest presenting a raw account UUID as
- * their guest token can never collide with the account's identity.
- */
-export function deriveAccountPersistentId(accountUuid: string): string {
-  const digest = createHmac("sha256", bootSecret)
-    .update(`pocketedu:v1:${accountUuid}`, "utf8")
-    .digest();
-  const bytes = Buffer.from(digest.subarray(0, 16));
-  bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
-  bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 10
-  const hex = bytes.toString("hex");
-  return (
-    `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}` +
-    `-${hex.slice(16, 20)}-${hex.slice(20)}`
-  );
-}
+// (Identity derivation lives in ./identityNamespaces: three fixed,
+// disjoint namespaces for guests, account auth identities, and public
+// profile ids. See that module for the full rationale.)
 
 function decodePart(part: string): unknown {
   return JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
@@ -392,8 +393,12 @@ export async function verifyPocketEduToken(
 // This self-host has no store, subscriptions, rankings, achievements, clans
 // or currency, so the response says exactly that: empty collections, nulls
 // and `false` where the schema requires a value. Nothing is fabricated.
-// The stable identity is the derived persistent id (opaque, per-boot); the
-// raw account UUID is never exposed here.
+//
+// Identity separation: the profile exposes the account's *public* id
+// (PUBLIC_NAMESPACE derivation) — what other players may see in lobbies.
+// The authentication identity (ACCOUNT_NAMESPACE derivation) is never
+// exposed here or anywhere client-visible; the raw account UUID is never
+// exposed either.
 // ---------------------------------------------------------------------------
 
 export function buildPocketEduUserMe(
@@ -402,7 +407,7 @@ export function buildPocketEduUserMe(
   const candidate = {
     user: {},
     player: {
-      publicId: identity.persistentId,
+      publicId: deriveAccountPublicId(identity.accountUuid),
       adfree: false,
       unlimitedRanked: false,
       canCreatePublicLobbies: false,
