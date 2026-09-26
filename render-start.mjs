@@ -30,6 +30,25 @@ const PUBLIC_ORIGIN = 'https://openfront-friends.onrender.com';
 // /cluster.json 404 means "reachable, no list" and the client falls back to
 // the cluster map injected into the page.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// CORS for alternate frontends (e.g. a static copy of this client hosted on
+// Netlify). The game sends no cookies — the play token travels in the
+// Authorization header — so reflecting the requesting origin is sufficient.
+// Preflights are answered here; the upstream game server allowlists only its
+// own hosts and would otherwise omit the grant headers.
+// ---------------------------------------------------------------------------
+function corsHeaders(req) {
+  const origin = req.headers.origin;
+  if (!origin) return {};
+  return {
+    'access-control-allow-origin': origin,
+    'vary': 'Origin',
+    'access-control-allow-methods': 'GET, POST, OPTIONS',
+    'access-control-allow-headers': 'Authorization, Content-Type',
+    'access-control-max-age': '86400',
+  };
+}
+
 function apiStub(req, res) {
   const path = (req.url || '/').split('?')[0];
   const json = (code, obj) => {
@@ -38,6 +57,7 @@ function apiStub(req, res) {
       'content-type': 'application/json; charset=utf-8',
       'content-length': body.length,
       'cache-control': 'no-store',
+      ...corsHeaders(req),
     });
     res.end(body);
   };
@@ -89,6 +109,11 @@ function looksLikePage(url) {
 }
 
 const front = http.createServer((req, res) => {
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, { ...corsHeaders(req), 'content-length': '0', 'cache-control': 'no-store' });
+    res.end();
+    return;
+  }
   if (apiStub(req, res) !== false) return;
 
   const target = route(req.url);
@@ -114,7 +139,7 @@ const front = http.createServer((req, res) => {
           else if (enc.includes('deflate')) body = zlib.inflateSync(body);
           else if (enc.includes('br')) body = zlib.brotliDecompressSync(body);
           const patched = Buffer.from(patchHtml(body.toString('utf8')));
-          const outHeaders = { ...response.headers };
+          const outHeaders = { ...response.headers, ...corsHeaders(req) };
           delete outHeaders['content-length'];
           delete outHeaders['content-encoding'];
           delete outHeaders['etag'];
@@ -129,7 +154,7 @@ const front = http.createServer((req, res) => {
       response.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); });
       return;
     }
-    res.writeHead(response.statusCode ?? 502, response.headers);
+    res.writeHead(response.statusCode ?? 502, { ...response.headers, ...corsHeaders(req) });
     response.pipe(res);
   });
   upstream.on('error', () => { if (!res.headersSent) res.writeHead(503); res.end('Server is starting. Please try again.'); });
