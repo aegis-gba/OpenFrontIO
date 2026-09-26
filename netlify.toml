@@ -1,0 +1,42 @@
+# Netlify config for a STATIC frontend of the self-hosted OpenFront game.
+#
+# This deploys only the game client (HTML/JS/assets). All gameplay traffic
+# (API + WebSockets) goes to the Render backend at
+# https://openfront-friends.onrender.com, which the page is pointed at via
+# the GAME_HOST / CDN_BASE build environment below and already sends the
+# CORS headers a cross-origin frontend needs.
+#
+# Build pipeline:
+#   1. install + typecheck + vite build  -> static/
+#   2. buildAssetHashes                  -> hashed public assets + manifest
+#   3. RenderStaticIndex (repo's own EJS renderer, same one the game server
+#      uses per request) renders static/index.html with the env below, so the
+#      page carries serverHost/cdnBase/cluster for the Render backend
+#   4. netlify-static-postbuild.mjs applies the apiHost seed, promo hiding
+#      and ad-tag removal that the Render adapter normally injects per request
+#
+# NOTE: Render ignores this file; it only affects Netlify builds.
+
+[build]
+  publish = "static"
+  command = "npm ci --ignore-scripts && npx tsc --noEmit && npx vite build && node --import tsx scripts/buildAssetHashes.ts && node --import tsx src/server/RenderStaticIndex.ts > static/index.html.rendered && mv static/index.html.rendered static/index.html && node scripts/netlify-static-postbuild.mjs"
+
+[build.environment]
+  NODE_VERSION = "24"
+  HUSKY = "0"
+  GAME_ENV = "dev"
+  DOMAIN = "localhost"
+  GAME_HOST = "openfront-friends.onrender.com"
+  CDN_BASE = "https://openfront-friends.onrender.com"
+  GIT_COMMIT = "38cd12d4043ce6e700fc31da29dd1be39dc67879"
+  TURNSTILE_SITE_KEY = "1x00000000000000000000AA"
+  NUM_WORKERS = "1"
+  INSTANCE_ID = ""
+
+# Single-page-app fallback: game URLs look like /w0/game/<id>?lobby and must
+# serve index.html so the client can read the lobby id from the URL.
+# Non-forced (no "!"), so real files under /assets/ and /_assets/ still win.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
