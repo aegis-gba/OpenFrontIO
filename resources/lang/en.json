@@ -1146,6 +1146,7 @@
     "list_lobby_max_players": "Max players",
     "list_lobby_start_minutes": "Starts in (minutes)",
     "list_lobby_title": "List lobby publicly",
+    "lobby_code": "Lobby code",
     "mode": "Mode",
     "nation_player": "Nation",
     "nation_players": "Nations",

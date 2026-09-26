@@ -13,6 +13,7 @@ import { GameType } from "../core/game/Game";
 import {
   ClientMessage,
   ClientPlatformSchema,
+  GameID,
   HOSTED_LOBBY_AUTO_START_MS,
   ID,
   isValidGameID,
@@ -234,9 +235,19 @@ export async function startWorker() {
       // through and gets replaced by a fresh lobby.
     }
 
-    const id = ServerEnv.generateGameIdForWorker(workerId);
+    // Self-host customization: private lobbies get a random 4-digit code
+    // (e.g. "4821") instead of the 10-char nanoid, so the host can read it
+    // out and friends can type it in. Rejection-sample for worker affinity
+    // and retry on collision (9000 codes, so this terminates quickly).
+    let id: GameID | null = null;
+    for (let i = 0; i < 50 && id === null; i++) {
+      const code = String(1000 + Math.floor(Math.random() * 9000));
+      if (ServerEnv.workerIndex(code) !== workerId) continue;
+      if (gm.game(code) !== null) continue;
+      id = code;
+    }
     if (id === null) {
-      log.warn(`Failed to mint game id on worker ${workerId}`);
+      log.warn(`Failed to mint 4-digit game code on worker ${workerId}`);
       return res.status(500).json({ error: "Could not allocate game id" });
     }
 

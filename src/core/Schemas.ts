@@ -591,7 +591,11 @@ const EmojiSchema = zb.uint({ max: flattenedEmojiTable.length - 1 });
 // be 10 (instance letter + 9 random). The range ships ahead of the new format
 // so every deployed client/server validates the longer ids before any are
 // minted — old bundles reject unknown id lengths at the Zod layer.
-export const GAME_ID_REGEX = /^[A-Za-z0-9]{8,10}$/;
+// Self-host customization: private lobbies on this deployment use random
+// 4-digit numeric codes (e.g. "4821") so hosts can read them out and friends
+// can type them in. The classic 8-10 char ids are still accepted everywhere
+// (replays, archives, old links).
+export const GAME_ID_REGEX = /^([A-Za-z0-9]{8,10}|\d{4})$/;
 
 export const isValidGameID = (value: string): boolean =>
   GAME_ID_REGEX.test(value);

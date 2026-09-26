@@ -510,6 +510,20 @@ export class HostLobbyModal extends BaseModal {
         <div
           class="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-6 mr-1 mx-auto w-full max-w-5xl"
         >
+          ${this.lobbyId
+            ? html`<div
+                class="mb-6 flex flex-col items-center gap-1 rounded-xl border border-white/10 bg-white/5 px-4 py-4"
+              >
+                <span
+                  class="text-[11px] font-bold uppercase tracking-[0.3em] text-white/50"
+                  >${translateText("host_modal.lobby_code")}</span
+                >
+                <span
+                  class="font-mono text-4xl font-black tracking-[0.25em] text-white"
+                  >${this.lobbyId}</span
+                >
+              </div>`
+            : nothing}
           ${this.publiclyListed
             ? html`<div
                 class="mb-6 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm font-medium text-amber-300"

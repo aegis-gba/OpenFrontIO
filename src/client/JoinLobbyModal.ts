@@ -429,6 +429,7 @@ export class JoinLobbyModal extends BaseModal {
             <div class="flex gap-2">
               <input
                 type="text"
+                inputmode="numeric"
                 id="lobbyIdInput"
                 placeholder=${translateText("private_lobby.enter_id")}
                 @keyup=${this.handleChange}
