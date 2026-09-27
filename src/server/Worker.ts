@@ -28,6 +28,7 @@ import { decodeClientMessage, encodeServerMessage } from "../core/ZbinWire";
 import { registerAdminBotRoutes } from "./AdminBotRoutes";
 import { censorPlayer } from "./Censor";
 import { Client } from "./Client";
+import { registerEduAdminRoutes } from "./EduAdminRoutes";
 import { gameApiCors } from "./GameApiCors";
 import { GameManager } from "./GameManager";
 import { registerGamePreviewRoute } from "./GamePreviewRoute";
@@ -440,6 +441,7 @@ export async function startWorker() {
   });
 
   registerAdminBotRoutes({ app, gm, workerId, log });
+  registerEduAdminRoutes({ app, gm, workerId, log });
 
   // WebSocket handling
   wss.on("connection", (ws: WebSocket, req) => {

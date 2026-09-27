@@ -24,6 +24,9 @@ const player = actor();
 const host = actor({ isLobbyCreator: true });
 const admin = actor({ isAdmin: true });
 const bot = actor({ isAdmin: true, isAdminBot: true });
+// Pocket Edu admin capability (./eduAdminAuth): an admin with no lobby seat,
+// authorized wherever the admin bot is, but without its public-game refusal.
+const eduAdmin = actor({ isAdmin: true, isEduAdmin: true });
 
 const lobby = (over: Partial<IntentGameState> = {}): IntentGameState => ({
   isPublic: false,
@@ -47,6 +50,15 @@ describe("authorizeIntent", () => {
     // else is considered.
     ["bot on a public game", spawn, bot, lobby({ isPublic: true }), 403],
     ["bot kick on a public game", kick, bot, lobby({ isPublic: true }), 403],
+    // Unlike the bot, the edu admin has no blanket public-game refusal: it
+    // moderates public games too, so kick goes through.
+    [
+      "edu admin kick on a public game",
+      kick,
+      eduAdmin,
+      lobby({ isPublic: true }),
+      null,
+    ],
 
     [
       "mark_disconnected from anyone",
@@ -79,6 +91,14 @@ describe("authorizeIntent", () => {
       lobby({ isListed: true }),
       null,
     ],
+    ["kick by edu admin", kick, eduAdmin, lobby(), null],
+    [
+      "kick by edu admin in a listed lobby",
+      kick,
+      eduAdmin,
+      lobby({ isListed: true }),
+      null,
+    ],
     [
       "kick by the host of a listed game that started",
       kick,
@@ -97,6 +117,7 @@ describe("authorizeIntent", () => {
     ],
     ["config by the host", config({ bots: 1 }), host, lobby(), null],
     ["config by the bot", config({ bots: 1 }), bot, lobby(), null],
+    ["config by edu admin", config({ bots: 1 }), eduAdmin, lobby(), null],
     [
       "config on a public game",
       config({ bots: 1 }),
@@ -140,9 +161,23 @@ describe("authorizeIntent", () => {
       null,
     ],
     [
+      "config by edu admin in a listed lobby",
+      config({ bots: 1 }),
+      eduAdmin,
+      lobby({ isListed: true }),
+      null,
+    ],
+    [
       "config enabling host cheats in a bot's listed lobby",
       config({ hostCheats: { infiniteGold: true } }),
       bot,
+      lobby({ isListed: true }),
+      409,
+    ],
+    [
+      "config enabling host cheats in edu admin's listed lobby",
+      config({ hostCheats: { infiniteGold: true } }),
+      eduAdmin,
       lobby({ isListed: true }),
       409,
     ],
@@ -150,6 +185,14 @@ describe("authorizeIntent", () => {
     ["start timer by a player", timer, player, lobby(), 403],
     ["start timer by the host", timer, host, lobby(), null],
     ["start timer by the bot", timer, bot, lobby(), null],
+    ["start timer by edu admin", timer, eduAdmin, lobby(), null],
+    [
+      "start timer by edu admin on a public game",
+      timer,
+      eduAdmin,
+      lobby({ isPublic: true }),
+      403,
+    ],
     [
       "start timer on a public game",
       timer,
@@ -181,6 +224,13 @@ describe("authorizeIntent", () => {
       lobby({ isListed: true, hasStarted: true }),
       null,
     ],
+    [
+      "pause by edu admin in a listed game",
+      pause,
+      eduAdmin,
+      lobby({ isListed: true, hasStarted: true }),
+      null,
+    ],
     ["pause before the start", pause, host, lobby(), 409],
 
     ["gameplay by a player", spawn, player, lobby(), null],
@@ -193,6 +243,7 @@ describe("authorizeIntent", () => {
     ],
     ["gameplay by an admin", spawn, admin, lobby(), null],
     ["gameplay by the bot", spawn, bot, lobby(), 400],
+    ["gameplay by edu admin", spawn, eduAdmin, lobby(), 400],
   ])("%s", (_name, intent, who, game, status) => {
     const outcome = authorizeIntent(intent, who, game);
     if (status === null) {

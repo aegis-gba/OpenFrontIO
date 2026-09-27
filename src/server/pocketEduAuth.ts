@@ -1,5 +1,4 @@
-import { importJWK, jwtVerify, type JWK } from "jose";
-import { z } from "zod";
+import { importJWK, jwtVerify } from "jose";
 import {
   TokenPayload,
   TokenPayloadSchema,
@@ -12,6 +11,15 @@ import {
   deriveAccountPublicId,
 } from "./identityNamespaces";
 import { SELFHOST_FREE_FLARES } from "./selfhost";
+// Shared JWKS fetch/cache/rotation (also used by the admin capability
+// verifier in ./eduAdminAuth).
+import { getKeyByKid } from "./eduJwks";
+// Re-exported so existing importers (tests) keep working; the canonical home
+// of the cache is ./eduJwks.
+export { _resetEduJwksCacheForTests as _resetPocketEduJwksCacheForTests } from "./eduJwks";
+// Signature-blind routing check, so an admin capability presented as a
+// gameplay credential is rejected explicitly (fail-closed) below.
+import { hasAdminCapabilityMarker } from "./eduAdminAuth";
 
 // Re-exported so existing importers keep working; the canonical home of
 // these pure functions is ./identityNamespaces (no server dependencies).
@@ -60,7 +68,9 @@ const log = logger.child({ comp: "pocketedu-auth" });
 // - JWKS fetching is bounded (timeout + response size cap), cached with a
 //   TTL, de-duplicated while in flight, and refreshed once on unknown `kid`
 //   so key rotation works without a restart. A missing/unreachable JWKS
-//   only disables *account* authentication; guests keep playing.
+//   only disables *account* authentication; guests keep playing. The
+//   fetch/cache machinery is shared with the admin capability verifier in
+//   ./eduAdminAuth via ./eduJwks (one cache entry per JWKS URL).
 // - Nothing here logs tokens, Authorization headers, cookies or keys.
 // ---------------------------------------------------------------------------
 
@@ -76,10 +86,6 @@ const CLOCK_TOLERANCE_S = 30;
 // Display names are rendered in UI; keep them sane.
 const MAX_DISPLAY_NAME_LENGTH = 200;
 
-const JWKS_CACHE_TTL_MS = 10 * 60 * 1000;
-const JWKS_FETCH_TIMEOUT_MS = 5000;
-const JWKS_MAX_BYTES = 64 * 1024;
-
 export function pocketEduIssuer(): string {
   return process.env.POCKET_EDU_AUTH_ISSUER || DEFAULT_ISSUER;
 }
@@ -93,150 +99,10 @@ export function pocketEduJwksUrl(): string {
 }
 
 // ---------------------------------------------------------------------------
-// JWKS handling
+// JWKS handling lives in ./eduJwks (shared with the admin capability
+// verifier). The per-URL cache, TTL, bounded fetch, in-flight de-dup and
+// refresh-on-unknown-kid semantics are unchanged from before the split.
 // ---------------------------------------------------------------------------
-
-const PocketEduJwksSchema = z.object({
-  keys: z
-    .array(
-      z.object({
-        kty: z.literal("OKP"),
-        crv: z.literal("Ed25519"),
-        x: z.string().min(1),
-        kid: z.string().min(1),
-        // `alg` is optional in JWKS documents; when present it must be EdDSA.
-        alg: z.literal("EdDSA").optional(),
-      }),
-    )
-    .min(1),
-});
-
-interface JwksState {
-  keys: Map<string, JWK>;
-  fetchedAt: number;
-  inflight: Promise<Map<string, JWK>> | null;
-}
-
-const jwksState: JwksState = { keys: new Map(), fetchedAt: 0, inflight: null };
-
-async function readBoundedBody(
-  response: Response,
-  maxBytes: number,
-): Promise<string> {
-  const reader = response.body?.getReader();
-  if (!reader) {
-    // Fallback: no streaming body (e.g. mocked Response). Cap after the fact.
-    const text = await response.text();
-    if (text.length > maxBytes) throw new Error("JWKS response too large");
-    return text;
-  }
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel();
-      throw new Error("JWKS response too large");
-    }
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
-async function fetchJwks(): Promise<Map<string, JWK>> {
-  const url = pocketEduJwksUrl();
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      signal: AbortSignal.timeout(JWKS_FETCH_TIMEOUT_MS),
-      headers: { accept: "application/json" },
-    });
-  } catch (e) {
-    throw new Error(
-      `JWKS fetch failed: ${e instanceof Error ? e.message : String(e)}`,
-    );
-  }
-  if (!response.ok) {
-    throw new Error(`JWKS fetch failed: HTTP ${response.status}`);
-  }
-  const text = await readBoundedBody(response, JWKS_MAX_BYTES);
-  let json: unknown;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    throw new Error("JWKS response is not valid JSON");
-  }
-  const parsed = PocketEduJwksSchema.safeParse(json);
-  if (!parsed.success) {
-    throw new Error("JWKS response failed schema validation");
-  }
-  const keys = new Map<string, JWK>();
-  for (const k of parsed.data.keys) {
-    // First key wins on duplicate kid: rotation publishes the new key under
-    // a new kid, so duplicates are a misconfiguration, not a rotation.
-    if (!keys.has(k.kid)) keys.set(k.kid, k as JWK);
-  }
-  return keys;
-}
-
-async function getJwksKeys(
-  forceRefresh: boolean,
-): Promise<Map<string, JWK> | null> {
-  const now = Date.now();
-  if (!forceRefresh && now - jwksState.fetchedAt < JWKS_CACHE_TTL_MS) {
-    return jwksState.keys;
-  }
-  if (jwksState.inflight) {
-    try {
-      return await jwksState.inflight;
-    } catch {
-      return null;
-    }
-  }
-  const pending = fetchJwks()
-    .then((keys) => {
-      jwksState.keys = keys;
-      jwksState.fetchedAt = Date.now();
-      jwksState.inflight = null;
-      return keys;
-    })
-    .catch((e: unknown) => {
-      jwksState.inflight = null;
-      // Never log response bodies or tokens; the URL and the failure class
-      // are enough to diagnose a broken issuer configuration.
-      log.warn(
-        `Pocket Edu JWKS unavailable (${pocketEduJwksUrl()}): ${e instanceof Error ? e.message : String(e)}`,
-      );
-      throw e;
-    });
-  jwksState.inflight = pending;
-  try {
-    return await pending;
-  } catch {
-    // Fail closed for account auth, but never take down the caller: guests
-    // and the game server keep working when the issuer is unreachable.
-    return null;
-  }
-}
-
-async function getKeyByKid(kid: string): Promise<JWK | null> {
-  const keys = await getJwksKeys(false);
-  const hit = keys?.get(kid);
-  if (hit) return hit;
-  // Unknown kid: refresh once in case Pocket Edu rotated keys since our
-  // last fetch. A second miss is a genuine rejection, not a retry loop.
-  const refreshed = await getJwksKeys(true);
-  return refreshed?.get(kid) ?? null;
-}
-
-/** Test-only seam: drop the cached JWKS so tests can start from a clean state. */
-export function _resetPocketEduJwksCacheForTests(): void {
-  jwksState.keys = new Map();
-  jwksState.fetchedAt = 0;
-  jwksState.inflight = null;
-}
 
 // ---------------------------------------------------------------------------
 // Token verification
@@ -300,6 +166,17 @@ export async function verifyPocketEduToken(
   const parts = token.split(".");
   if (parts.length !== 3) return fail("malformed token");
 
+  // Explicit fail-closed routing: an admin capability JWT — or any token
+  // carrying an admin marker (the admin audience OR the discrete admin
+  // scope) — is never a gameplay credential. Its audience would fail
+  // verification below anyway; naming the confusion here keeps the
+  // rejection debuggable instead of looking like a generic audience
+  // mismatch.
+  if (hasAdminCapabilityMarker(token)) {
+    log.warn("Pocket Edu admin capability presented as gameplay credential");
+    return fail("admin capability presented as gameplay credential");
+  }
+
   let header: unknown;
   try {
     header = decodePart(parts[0]);
@@ -319,7 +196,7 @@ export async function verifyPocketEduToken(
   // NOTE: `jku`/`x5u` header fields, if present, are deliberately ignored:
   // verification keys come only from the configured JWKS URL.
 
-  const jwk = await getKeyByKid(kid);
+  const jwk = await getKeyByKid(pocketEduJwksUrl(), kid);
   if (!jwk) return fail("unknown signing key");
 
   let publicKey;

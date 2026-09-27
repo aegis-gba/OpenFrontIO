@@ -393,6 +393,7 @@ export class GameServer {
           target,
           isAdmin: actor.isAdmin,
           isAdminBot: actor.isAdminBot,
+          isEduAdmin: actor.isEduAdmin ?? false,
           gameID: this.id,
         });
         this.kickClient(target, reason);

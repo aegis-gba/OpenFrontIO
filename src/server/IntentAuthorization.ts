@@ -7,6 +7,10 @@ export interface IntentActor {
   isLobbyCreator: boolean;
   isAdmin: boolean; // role-based admin/root (also true for the admin bot)
   isAdminBot: boolean; // the trusted admin-bot HTTP API
+  // Pocket Edu admin capability (./eduAdminAuth): a verified admin JWT acting
+  // through the /api/admin routes. Authorized wherever the admin bot is, via
+  // isAdmin for kick_player. Optional so existing constructions keep working.
+  isEduAdmin?: boolean;
 }
 
 // Outcome of dispatching an intent. `status` is an HTTP-style code: 200 on
@@ -63,7 +67,7 @@ export function authorizeIntent(
       return null;
 
     case "update_game_config":
-      if (!actor.isLobbyCreator && !actor.isAdminBot) {
+      if (!actor.isLobbyCreator && !actor.isAdminBot && !actor.isEduAdmin) {
         return {
           status: 403,
           error: "only the lobby creator can update game config",
@@ -81,7 +85,7 @@ export function authorizeIntent(
       // Players joined a listed lobby for the settings it was advertised
       // with, so the host can't change them afterwards. The admin bot still
       // manages the lobbies it lists.
-      if (game.isListed && !actor.isAdminBot) {
+      if (game.isListed && !actor.isAdminBot && !actor.isEduAdmin) {
         return {
           status: 409,
           error: "cannot change the config of a publicly listed lobby",
@@ -109,7 +113,7 @@ export function authorizeIntent(
       return null;
 
     case "toggle_game_start_timer":
-      if (!actor.isLobbyCreator && !actor.isAdminBot) {
+      if (!actor.isLobbyCreator && !actor.isAdminBot && !actor.isEduAdmin) {
         return { status: 403, error: "only the lobby creator can start" };
       }
       if (game.isPublic) {
@@ -121,10 +125,10 @@ export function authorizeIntent(
       return null;
 
     case "toggle_pause":
-      if (!actor.isLobbyCreator && !actor.isAdminBot) {
+      if (!actor.isLobbyCreator && !actor.isAdminBot && !actor.isEduAdmin) {
         return { status: 403, error: "only the lobby creator can pause" };
       }
-      if (game.isListed && !actor.isAdminBot) {
+      if (game.isListed && !actor.isAdminBot && !actor.isEduAdmin) {
         return {
           status: 403,
           error: "the host cannot pause a publicly listed game",
@@ -140,6 +144,11 @@ export function authorizeIntent(
       // Gameplay intents: websocket players only.
       if (actor.isAdminBot) {
         return { status: 400, error: "intent not permitted for admin bot" };
+      }
+      // The edu-admin actor has no seat in the game; it may only issue the
+      // moderation intents above, never gameplay intents.
+      if (actor.isEduAdmin) {
+        return { status: 400, error: "intent not permitted for edu admin" };
       }
       return null;
   }
