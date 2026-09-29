@@ -52,6 +52,7 @@ export type Intent =
   | UpgradeStructureIntent
   | DeleteUnitIntent
   | KickPlayerIntent
+  | UnkickPlayerIntent
   | TogglePauseIntent
   | UpdateGameConfigIntent
   | ToggleGameStartTimer;
@@ -84,6 +85,7 @@ export type AllianceExtensionIntent = z.infer<
 >;
 export type DeleteUnitIntent = z.infer<typeof DeleteUnitIntentSchema>;
 export type KickPlayerIntent = z.infer<typeof KickPlayerIntentSchema>;
+export type UnkickPlayerIntent = z.infer<typeof UnkickPlayerIntentSchema>;
 export type TogglePauseIntent = z.infer<typeof TogglePauseIntentSchema>;
 export type UpdateGameConfigIntent = z.infer<
   typeof UpdateGameConfigIntentSchema
@@ -759,6 +761,14 @@ export const KickPlayerIntentSchema = z.object({
   targetPublicID: MappedID.optional(),
 });
 
+export const UnkickPlayerIntentSchema = z.object({
+  type: z.literal("unkick_player"),
+  // Same targeting as kick_player: a live clientID or an account publicID.
+  // Resolved to the banned persistentID; exactly one is set.
+  targetClientID: MappedID.optional(),
+  targetPublicID: MappedID.optional(),
+});
+
 export const TogglePauseIntentSchema = z.object({
   type: z.literal("toggle_pause"),
   paused: z.boolean().default(false),
@@ -798,6 +808,7 @@ export const IntentSchema = z.discriminatedUnion("type", [
   AllianceExtensionIntentSchema,
   DeleteUnitIntentSchema,
   KickPlayerIntentSchema,
+  UnkickPlayerIntentSchema,
   TogglePauseIntentSchema,
   UpdateGameConfigIntentSchema,
   ToggleGameStartTimerIntentSchema,

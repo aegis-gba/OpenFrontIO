@@ -142,6 +142,22 @@ describe("Roster", () => {
     expect(roster.isKicked("p2-pid")).toBe(true);
   });
 
+  it("unkick lifts the ban so the account may join again", () => {
+    const roster = new Roster();
+    const p1 = makeClient({ clientID: cid("p1"), persistentID: "p1-pid" });
+    roster.add(p1);
+    roster.kick(p1);
+    expect(roster.isKicked("p1-pid")).toBe(true);
+    expect(roster.wasAdmitted("p1-pid")).toBe(false);
+
+    expect(roster.unkick("p1-pid")).toBe(true);
+    expect(roster.isKicked("p1-pid")).toBe(false);
+    expect(roster.wasAdmitted("p1-pid")).toBe(true);
+    // Unkicking someone who was never banned reports false.
+    expect(roster.unkick("p1-pid")).toBe(false);
+    expect(roster.unkick("nobody")).toBe(false);
+  });
+
   it("prunes clients silent for longer than the limit and hands them back", () => {
     const roster = new Roster();
     const p1 = makeClient({ clientID: cid("p1") });

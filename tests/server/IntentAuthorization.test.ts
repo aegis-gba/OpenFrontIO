@@ -36,6 +36,7 @@ const lobby = (over: Partial<IntentGameState> = {}): IntentGameState => ({
 });
 
 const kick: Intent = { type: "kick_player", targetClientID: cid("p2") };
+const unkick: Intent = { type: "unkick_player", targetClientID: cid("p2") };
 const config = (c: Partial<GameConfig>): Intent => ({
   type: "update_game_config",
   config: c,
@@ -105,6 +106,38 @@ describe("authorizeIntent", () => {
       host,
       lobby({ isListed: true, hasStarted: true }),
       403,
+    ],
+
+    ["unkick by a player", unkick, player, lobby(), 403],
+    ["unkick by the host", unkick, host, lobby(), null],
+    [
+      "unkick by the host of a listed lobby",
+      unkick,
+      host,
+      lobby({ isListed: true }),
+      403,
+    ],
+    ["unkick by edu admin", unkick, eduAdmin, lobby(), null],
+    [
+      "unkick by edu admin in a listed lobby",
+      unkick,
+      eduAdmin,
+      lobby({ isListed: true }),
+      null,
+    ],
+    [
+      "unkick by edu admin on a public game",
+      unkick,
+      eduAdmin,
+      lobby({ isPublic: true }),
+      null,
+    ],
+    [
+      "gameplay intent by edu admin is refused",
+      spawn,
+      eduAdmin,
+      lobby(),
+      400,
     ],
 
     ["config by a player", config({ bots: 1 }), player, lobby(), 403],

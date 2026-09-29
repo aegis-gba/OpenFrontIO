@@ -400,6 +400,40 @@ export class GameServer {
         return finish({ status: 200 });
       }
 
+      case "unkick_player": {
+        // Resolve the target exactly like kick_player (a clientID, or an
+        // account publicId matched against everyone who ever joined), then
+        // lift the persistentID ban so they may join again. Unlike a kick,
+        // this never touches a connection: the ban is what blocks rejoin.
+        let target = stamped.targetClientID;
+        if (target === undefined && stamped.targetPublicID !== undefined) {
+          target = [...this.clients.all().values()].find(
+            (c) => c.publicId === stamped.targetPublicID,
+          )?.clientID;
+        }
+        if (target === undefined) {
+          return finish({ status: 404, error: "no matching player to unkick" });
+        }
+        const client = this.clients.get(target);
+        if (client === undefined) {
+          return finish({ status: 404, error: "no matching player to unkick" });
+        }
+        const wasBanned = this.clients.unkick(client.persistentID);
+        this.log.info("player unkicked", {
+          unkicker: stamped.clientID,
+          target,
+          wasBanned,
+          isAdmin: actor.isAdmin,
+          isAdminBot: actor.isAdminBot,
+          isEduAdmin: actor.isEduAdmin ?? false,
+          gameID: this.id,
+        });
+        if (!wasBanned) {
+          return finish({ status: 404, error: "player is not banned" });
+        }
+        return finish({ status: 200 });
+      }
+
       case "update_game_config": {
         this.updateGameConfig(stamped.config);
         return finish({ status: 200 });
@@ -1542,6 +1576,25 @@ export class GameServer {
 
   isPaused(): boolean {
     return this.paused;
+  }
+
+  // Admin late-join: move a connected spectator into a player seat. Only
+  // valid before the game starts (the sim's player list is frozen at start).
+  // Returns whether the client was found and seated.
+  admitAsPlayer(clientID: string): boolean {
+    const client = this.clients.get(clientID as ClientID);
+    if (client === undefined) return false;
+    if (!client.spectator) return true;
+    this.setSpectator(client, false);
+    return !client.spectator;
+  }
+
+  // Whether this clientID holds a seat in the started game (i.e. it appears
+  // in the frozen gameStartInfo player list). A seated player who disconnected
+  // may rejoin; anyone else missed the start.
+  hasPlayerSeat(clientID: string): boolean {
+    if (!this.hasStarted()) return false;
+    return this.gameStartInfo.players.some((p) => p.clientID === clientID);
   }
 
   // Omitting viewer (e.g. the HTTP /api/game/:id and link-preview routes)

@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from "express";
 import type { Logger } from "winston";
 import { z } from "zod";
-import { ID, type Intent } from "../core/Schemas";
+import { GameConfigSchema, ID, type Intent } from "../core/Schemas";
 import { verifyEduAdminToken } from "./eduAdminAuth";
 import type { GameManager } from "./GameManager";
 import type { IntentActor } from "./IntentAuthorization";
@@ -62,6 +62,16 @@ const KickBodySchema = z
       1,
     { message: "exactly one of clientID, publicID is required" },
   );
+
+// Host cheats for the /cheats route. Mirrors the hostCheats field of
+// GameConfigSchema; {enabled:false} clears cheats entirely.
+const CheatsBodySchema = z.object({
+  enabled: z.boolean().default(true),
+  infiniteGold: z.boolean().optional(),
+  infiniteTroops: z.boolean().optional(),
+  goldMultiplier: z.number().min(0.1).max(1000).nullable().optional(),
+  startingGold: z.number().int().max(1000000000).nullable().optional(),
+});
 
 export function registerEduAdminRoutes(opts: {
   app: Express;
@@ -257,6 +267,325 @@ export function registerEduAdminRoutes(opts: {
       res.json({ ended: true });
     } catch (e) {
       log.warn("edu admin end failed", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      res.status(500).json({ error: "Internal error" });
+    }
+  });
+
+  // Unkick a player: lifts the persistentID ban a kick imposed, so they may
+  // join again. Same targeting as kick (live clientID or account publicID).
+  // 404 when the target isn't found or isn't actually banned.
+  app.post("/api/admin/game/:id/unkick", async (req, res) => {
+    try {
+      const persistentId = await authenticate(req, res);
+      if (persistentId === null) return;
+      const id = req.params.id as string;
+      if (!ownsGame(id, res)) return;
+      const parsed = KickBodySchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({ error: z.prettifyError(parsed.error) });
+      }
+      const game = gm.game(id);
+      if (game === null) {
+        return res.status(404).json({ error: "Game not found" });
+      }
+      const intent: Intent = {
+        type: "unkick_player",
+        targetClientID: parsed.data.clientID,
+        targetPublicID: parsed.data.publicID,
+      };
+      const result = game.handleIntent(intent, eduAdminActor(persistentId));
+      if (result.status !== 200) {
+        return res
+          .status(result.status)
+          .json({ error: result.error ?? "error" });
+      }
+      log.info("edu admin unkicked player", {
+        gameID: id,
+        actor: persistentId,
+        targetClientID: parsed.data.clientID,
+        targetPublicID: parsed.data.publicID,
+      });
+      res.json({ unkicked: true });
+    } catch (e) {
+      log.warn("edu admin unkick failed", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      res.status(500).json({ error: "Internal error" });
+    }
+  });
+
+  // Pause a running game. Idempotent: already-paused returns success without
+  // sending another intent.
+  app.post("/api/admin/game/:id/pause", async (req, res) => {
+    try {
+      const persistentId = await authenticate(req, res);
+      if (persistentId === null) return;
+      const id = req.params.id as string;
+      if (!ownsGame(id, res)) return;
+      const game = gm.game(id);
+      if (game === null) {
+        return res.status(404).json({ error: "Game not found" });
+      }
+      if (!game.hasStarted()) {
+        return res.status(409).json({ error: "game not started" });
+      }
+      if (game.isPaused()) {
+        return res.json({ paused: true, alreadyPaused: true });
+      }
+      const intent: Intent = { type: "toggle_pause", paused: true };
+      const result = game.handleIntent(intent, eduAdminActor(persistentId));
+      if (result.status !== 200) {
+        return res
+          .status(result.status)
+          .json({ error: result.error ?? "error" });
+      }
+      log.info("edu admin paused game", { gameID: id, actor: persistentId });
+      res.json({ paused: true, alreadyPaused: false });
+    } catch (e) {
+      log.warn("edu admin pause failed", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      res.status(500).json({ error: "Internal error" });
+    }
+  });
+
+  // Resume a paused game. Idempotent like pause.
+  app.post("/api/admin/game/:id/resume", async (req, res) => {
+    try {
+      const persistentId = await authenticate(req, res);
+      if (persistentId === null) return;
+      const id = req.params.id as string;
+      if (!ownsGame(id, res)) return;
+      const game = gm.game(id);
+      if (game === null) {
+        return res.status(404).json({ error: "Game not found" });
+      }
+      if (!game.hasStarted()) {
+        return res.status(409).json({ error: "game not started" });
+      }
+      if (!game.isPaused()) {
+        return res.json({ paused: false, alreadyResumed: true });
+      }
+      const intent: Intent = { type: "toggle_pause", paused: false };
+      const result = game.handleIntent(intent, eduAdminActor(persistentId));
+      if (result.status !== 200) {
+        return res
+          .status(result.status)
+          .json({ error: result.error ?? "error" });
+      }
+      log.info("edu admin resumed game", { gameID: id, actor: persistentId });
+      res.json({ paused: false, alreadyResumed: false });
+    } catch (e) {
+      log.warn("edu admin resume failed", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      res.status(500).json({ error: "Internal error" });
+    }
+  });
+
+  // Update the lobby's game config. Same guards as the lobby creator's own
+  // config edits: lobby phase only, never public, never listed. This is also
+  // the path for enabling host cheats (see /cheats for the convenience form).
+  app.post("/api/admin/game/:id/config", async (req, res) => {
+    try {
+      const persistentId = await authenticate(req, res);
+      if (persistentId === null) return;
+      const id = req.params.id as string;
+      if (!ownsGame(id, res)) return;
+      const parsed = GameConfigSchema.partial().safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({ error: z.prettifyError(parsed.error) });
+      }
+      const game = gm.game(id);
+      if (game === null) {
+        return res.status(404).json({ error: "Game not found" });
+      }
+      const intent: Intent = {
+        type: "update_game_config",
+        config: parsed.data,
+      };
+      const result = game.handleIntent(intent, eduAdminActor(persistentId));
+      if (result.status !== 200) {
+        return res
+          .status(result.status)
+          .json({ error: result.error ?? "error" });
+      }
+      log.info("edu admin updated game config", {
+        gameID: id,
+        actor: persistentId,
+      });
+      res.json({ updated: true });
+    } catch (e) {
+      log.warn("edu admin config update failed", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      res.status(500).json({ error: "Internal error" });
+    }
+  });
+
+  // Cheats: enable, tweak, or disable the lobby's host cheats (infinite gold
+  // / infinite troops / gold multiplier / starting gold). Lobby phase only —
+  // the sim's economy is fixed once the game starts. {enabled:false} clears
+  // them entirely.
+  app.post("/api/admin/game/:id/cheats", async (req, res) => {
+    try {
+      const persistentId = await authenticate(req, res);
+      if (persistentId === null) return;
+      const id = req.params.id as string;
+      if (!ownsGame(id, res)) return;
+      const parsed = CheatsBodySchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({ error: z.prettifyError(parsed.error) });
+      }
+      const game = gm.game(id);
+      if (game === null) {
+        return res.status(404).json({ error: "Game not found" });
+      }
+      const { enabled, ...cheatFields } = parsed.data;
+      const hostCheats = enabled
+        ? {
+            infiniteGold: cheatFields.infiniteGold,
+            infiniteTroops: cheatFields.infiniteTroops,
+            goldMultiplier: cheatFields.goldMultiplier,
+            startingGold: cheatFields.startingGold,
+          }
+        : undefined;
+      const intent: Intent = {
+        type: "update_game_config",
+        config: { hostCheats },
+      };
+      const result = game.handleIntent(intent, eduAdminActor(persistentId));
+      if (result.status !== 200) {
+        return res
+          .status(result.status)
+          .json({ error: result.error ?? "error" });
+      }
+      log.info("edu admin set host cheats", {
+        gameID: id,
+        actor: persistentId,
+        enabled,
+      });
+      res.json({ cheats: enabled ? hostCheats : null });
+    } catch (e) {
+      log.warn("edu admin cheats failed", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      res.status(500).json({ error: "Internal error" });
+    }
+  });
+
+  // Late join: seat a waiting player. In the lobby phase this moves a
+  // spectator into a player seat. Once the game has started the engine cannot
+  // spawn new players (the sim's player list is frozen at start): a seated
+  // player who disconnected may still rejoin, but a brand-new arrival can only
+  // watch — the response says so and points at /remake.
+  app.post("/api/admin/game/:id/late_join", async (req, res) => {
+    try {
+      const persistentId = await authenticate(req, res);
+      if (persistentId === null) return;
+      const id = req.params.id as string;
+      if (!ownsGame(id, res)) return;
+      const parsed = KickBodySchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({ error: z.prettifyError(parsed.error) });
+      }
+      const game = gm.game(id);
+      if (game === null) {
+        return res.status(404).json({ error: "Game not found" });
+      }
+      // Resolve the target to a clientID the same way kick does.
+      let target = parsed.data.clientID;
+      if (target === undefined && parsed.data.publicID !== undefined) {
+        target = game
+          .roster()
+          .find((c: any) => c.publicId === parsed.data.publicID)?.clientID;
+      }
+      if (target === undefined) {
+        return res.status(404).json({ error: "no matching player found" });
+      }
+      if (!game.hasStarted()) {
+        const seated = game.admitAsPlayer(target);
+        if (!seated) {
+          return res.status(404).json({ error: "no matching player found" });
+        }
+        log.info("edu admin late-joined player to lobby", {
+          gameID: id,
+          actor: persistentId,
+          target,
+        });
+        return res.json({ admitted: true, as: "player" });
+      }
+      if (game.hasPlayerSeat(target)) {
+        log.info("edu admin late-join: seated player may rejoin", {
+          gameID: id,
+          actor: persistentId,
+          target,
+        });
+        return res.json({
+          admitted: true,
+          as: "rejoin",
+          note: "reconnect with the same account to reclaim the seat",
+        });
+      }
+      return res.status(409).json({
+        error: "game already started",
+        detail:
+          "new players cannot spawn mid-game: the simulation's player list is frozen at start",
+        suggestion: "POST /api/admin/game/:id/remake to restart the lobby",
+      });
+    } catch (e) {
+      log.warn("edu admin late_join failed", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      res.status(500).json({ error: "Internal error" });
+    }
+  });
+
+  // Remake: end this game and open a fresh lobby with the same settings,
+  // telling everyone still connected the new lobby id so they can hop over.
+  // The practical "let a late player in": they join the new lobby like
+  // everyone else. Kick bans do not carry over to the new lobby.
+  app.post("/api/admin/game/:id/remake", async (req, res) => {
+    try {
+      const persistentId = await authenticate(req, res);
+      if (persistentId === null) return;
+      const id = req.params.id as string;
+      if (!ownsGame(id, res)) return;
+      const game = gm.game(id);
+      if (game === null) {
+        return res.status(404).json({ error: "Game not found" });
+      }
+      // Mint a 4-digit code with worker affinity, mirroring Worker's
+      // /api/create_game (self-host customization).
+      let newId: string | null = null;
+      for (let i = 0; i < 50 && newId === null; i++) {
+        const code = String(1000 + Math.floor(Math.random() * 9000));
+        if (ServerEnv.workerIndex(code) !== workerId) continue;
+        if (gm.game(code) !== null) continue;
+        newId = code;
+      }
+      if (newId === null) {
+        log.warn("edu admin remake: could not mint game id", { gameID: id });
+        return res.status(500).json({ error: "Could not allocate game id" });
+      }
+      const newGame = gm.createGame(newId, { ...game.gameConfig });
+      if (newGame === null) {
+        return res.status(409).json({ error: "Game ID already exists" });
+      }
+      // Broadcast first so connected clients learn the new lobby id, then end
+      // the old game (which closes their connections).
+      game.setSuccessorLobby(newId);
+      await game.end();
+      log.info("edu admin remade game", {
+        gameID: id,
+        actor: persistentId,
+        newGameID: newId,
+      });
+      res.json({ remade: true, newGameID: newId });
+    } catch (e) {
+      log.warn("edu admin remake failed", {
         error: e instanceof Error ? e.message : String(e),
       });
       res.status(500).json({ error: "Internal error" });

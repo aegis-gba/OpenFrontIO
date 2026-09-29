@@ -48,6 +48,7 @@ export function authorizeIntent(
       return { status: 400, error: "mark_disconnected is server-internal" };
 
     case "kick_player":
+    case "unkick_player":
       if (!actor.isLobbyCreator && !actor.isAdmin) {
         return {
           status: 403,

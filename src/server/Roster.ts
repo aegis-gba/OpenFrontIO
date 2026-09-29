@@ -137,6 +137,15 @@ export class Roster {
     return this.kicked.has(persistentID);
   }
 
+  // Lifts a kick ban, so the persistentID may join again. Returns whether a
+  // ban was actually in place. The player's old client record (and its
+  // reconnect mapping, if still held) is untouched: a kicked-then-unkicked
+  // player rejoins through the normal path and, if their seat mapping
+  // survived, reconnects to it.
+  unkick(persistentID: string): boolean {
+    return this.kicked.delete(persistentID);
+  }
+
   // Whether this persistentID has already been admitted (passed Turnstile and
   // other join authorization) for this game. Kicked players are excluded so
   // a kick still forces them back through the gate.
