@@ -5,7 +5,13 @@ import { randomUUID } from "crypto";
 import { exportJWK, generateKeyPair, SignJWT, type JWK } from "jose";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { uuidToBase64url } from "../../src/core/Base64";
-import { registerEduAdminRoutes } from "../../src/server/EduAdminRoutes";
+import { GAME_ID_REGEX } from "../../src/core/Schemas";
+import {
+  createGameWireContext,
+  decodeServerMessage,
+  encodeServerMessage,
+} from "../../src/core/ZbinWire";
+import { eduAdminClientID, registerEduAdminRoutes } from "../../src/server/EduAdminRoutes";
 import { deriveAccountPersistentId } from "../../src/server/identityNamespaces";
 import { _resetPocketEduJwksCacheForTests } from "../../src/server/pocketEduAuth";
 import { ServerEnv } from "../../src/server/ServerEnv";
@@ -136,7 +142,7 @@ const noAuthReq = (body?: unknown) => ({
 });
 
 const EXPECTED_ACTOR = {
-  clientID: `edu-admin:${PERSISTENT_ID}`,
+  clientID: eduAdminClientID(PERSISTENT_ID),
   isLobbyCreator: false,
   isAdmin: true,
   isAdminBot: false,
@@ -1114,5 +1120,48 @@ describe("POST /api/admin/game/:id/bibis-wrath", () => {
     );
     expect(res.statusCode).toBe(401);
     expect(game.handleIntent).not.toHaveBeenCalled();
+  });
+});
+
+describe("eduAdminClientID (wire safety)", () => {
+  // Regression test: the stamped clientID on edu-admin intents rides the
+  // zbin clientID dictionary (StampedIntentSchema.clientID is a MappedID
+  // validated against GAME_ID_REGEX on decode). The old "edu-admin:<uuid>"
+  // format failed that validation, so every client threw a ZodError
+  // decoding any turn carrying an edu-admin intent — freezing the game for
+  // everyone with the timer stuck.
+  it("produces a GAME_ID_REGEX-valid, stable, per-admin id", () => {
+    const a = eduAdminClientID("550e8400-e29b-41d4-a716-446655440000");
+    const b = eduAdminClientID("550e8400-e29b-41d4-a716-446655440000");
+    const c = eduAdminClientID("123e4567-e89b-12d3-a456-426614174000");
+    expect(a).toMatch(GAME_ID_REGEX);
+    expect(a).toBe(b);
+    expect(a).not.toBe(c);
+    // Contains "I", which generateID() never emits, so it can never
+    // collide with a real player clientID (same trick as ADMINBOT).
+    expect(a).toContain("I");
+  });
+
+  it("a stamped edu-admin intent survives a zbin turn round-trip", () => {
+    const clientID = eduAdminClientID(PERSISTENT_ID);
+    const stamped: any = {
+      type: "admin_bibis_wrath",
+      target: "a1b2c3d4",
+      adminName: "TheAdmin",
+      targetName: "PlayerOne",
+      isNPC: false,
+      clientID,
+    };
+    const ctx = createGameWireContext([{ clientID: "a1b2c3d4" }]);
+    const bytes = encodeServerMessage(
+      { type: "turn", turn: { turnNumber: 0, intents: [stamped] } } as any,
+      ctx,
+    );
+    const decoded: any = decodeServerMessage(bytes, ctx);
+    expect(decoded.turn.intents[0]).toMatchObject({
+      type: "admin_bibis_wrath",
+      clientID,
+      adminName: "TheAdmin",
+    });
   });
 });

@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from "express";
 import type { Logger } from "winston";
 import { z } from "zod";
-import { GameConfigSchema, ID, type Intent } from "../core/Schemas";
+import { GameConfigSchema, ID, type ClientID, type Intent } from "../core/Schemas";
 import { verifyEduAdminToken } from "./eduAdminAuth";
 import type { GameManager } from "./GameManager";
 import type { IntentActor } from "./IntentAuthorization";
@@ -31,13 +31,28 @@ import { ServerEnv } from "./ServerEnv";
 // and the worker-wide HTTP rate limit applies.
 // ---------------------------------------------------------------------------
 
-// The edu-admin actor: an admin with no lobby seat. clientID is namespaced so
-// it can never collide with a real player id (and therefore can never
-// self-kick); the "no connected client" telemetry lookup in handleIntent
-// simply skips it, like the admin bot's intents.
+// The edu-admin actor: an admin with no lobby seat.
+//
+// The stamped clientID rides the zbin clientID dictionary on the wire
+// (StampedIntentSchema.clientID is a MappedID validated against
+// GAME_ID_REGEX on decode), so it must look like a real clientID: 8-10
+// alphanumeric chars. "edu-admin:<uuid>" fails that validation, which made
+// every client throw a ZodError decoding any turn carrying an edu-admin
+// intent (bibi's wrath, grant, revive, pause) — freezing the whole game.
+// Derive a stable, wire-safe id instead: "I" + 7 hex chars of the
+// persistentId. The "I" guarantees it can never collide with a real player
+// id (generateID() omits I/O/l/0 — same trick as ADMIN_BOT_CLIENT_ID), and
+// it stays unique per admin for turn-archive forensics. The "no connected
+// client" telemetry lookup in handleIntent simply skips it, like the admin
+// bot's intents.
+export function eduAdminClientID(persistentId: string): ClientID {
+  const hex = persistentId.replace(/[^0-9a-fA-F]/g, "").slice(0, 7);
+  return `I${hex.padEnd(7, "0")}`;
+}
+
 function eduAdminActor(persistentId: string): IntentActor {
   return {
-    clientID: `edu-admin:${persistentId}`,
+    clientID: eduAdminClientID(persistentId),
     isLobbyCreator: false,
     isAdmin: true,
     isAdminBot: false,
