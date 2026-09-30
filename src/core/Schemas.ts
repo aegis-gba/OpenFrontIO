@@ -53,6 +53,9 @@ export type Intent =
   | DeleteUnitIntent
   | KickPlayerIntent
   | UnkickPlayerIntent
+  | AdminGrantIntent
+  | AdminReviveIntent
+  | AdminBibisWrathIntent
   | TogglePauseIntent
   | UpdateGameConfigIntent
   | ToggleGameStartTimer;
@@ -86,6 +89,9 @@ export type AllianceExtensionIntent = z.infer<
 export type DeleteUnitIntent = z.infer<typeof DeleteUnitIntentSchema>;
 export type KickPlayerIntent = z.infer<typeof KickPlayerIntentSchema>;
 export type UnkickPlayerIntent = z.infer<typeof UnkickPlayerIntentSchema>;
+export type AdminGrantIntent = z.infer<typeof AdminGrantIntentSchema>;
+export type AdminReviveIntent = z.infer<typeof AdminReviveIntentSchema>;
+export type AdminBibisWrathIntent = z.infer<typeof AdminBibisWrathIntentSchema>;
 export type TogglePauseIntent = z.infer<typeof TogglePauseIntentSchema>;
 export type UpdateGameConfigIntent = z.infer<
   typeof UpdateGameConfigIntentSchema
@@ -769,6 +775,40 @@ export const UnkickPlayerIntentSchema = z.object({
   targetPublicID: MappedID.optional(),
 });
 
+// Edu-admin only. Grants (or removes, if negative) gold/troops to a player.
+// Runs as a simulation execution on every client so all sims stay in sync.
+// The target is the in-game player ID (resolved server-side from the
+// roster's clientID/publicID before the intent is stamped).
+export const AdminGrantIntentSchema = z.object({
+  type: z.literal("admin_grant"),
+  target: MappedID,
+  gold: zb.int({ min: -1000000000, max: 1000000000 }).nullable(),
+  troops: zb.int({ min: -1000000000, max: 1000000000 }).nullable(),
+});
+
+// Edu-admin only. Respawns a dead (0-tile) player at a fresh location via
+// the standard spawn logic, with a new PlayerExecution. No-op if the player
+// is alive or unknown. Runs on every client so sims stay in sync.
+export const AdminReviveIntentSchema = z.object({
+  type: z.literal("admin_revive"),
+  target: MappedID,
+});
+
+// Edu-admin only. "Bibi's Wrath": a fullscreen VS splash on every client's
+// screen for 5 seconds, admin name on the left, chosen player's name on the
+// right. Runs as a simulation execution so all clients show it on the same
+// tick; the execution emits a BibisWrathEvent update the client UI renders.
+// target is null + isNPC true when the target is an NPC (bot): bots live only
+// in the simulation, so the server can't resolve their IDs. The overlay is
+// cosmetic and needs only the display names.
+export const AdminBibisWrathIntentSchema = z.object({
+  type: z.literal("admin_bibis_wrath"),
+  target: MappedID.nullable(),
+  adminName: z.string().min(1).max(40),
+  targetName: z.string().min(1).max(40),
+  isNPC: z.boolean().default(false),
+});
+
 export const TogglePauseIntentSchema = z.object({
   type: z.literal("toggle_pause"),
   paused: z.boolean().default(false),
@@ -809,6 +849,9 @@ export const IntentSchema = z.discriminatedUnion("type", [
   DeleteUnitIntentSchema,
   KickPlayerIntentSchema,
   UnkickPlayerIntentSchema,
+  AdminGrantIntentSchema,
+  AdminReviveIntentSchema,
+  AdminBibisWrathIntentSchema,
   TogglePauseIntentSchema,
   UpdateGameConfigIntentSchema,
   ToggleGameStartTimerIntentSchema,

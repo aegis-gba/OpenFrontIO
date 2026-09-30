@@ -3,6 +3,9 @@ import { AllianceExtensionExecutionSnapshot } from "../execution/alliance/Allian
 import { AllianceRejectExecutionSnapshot } from "../execution/alliance/AllianceRejectExecution";
 import { AllianceRequestExecutionSnapshot } from "../execution/alliance/AllianceRequestExecution";
 import { BreakAllianceExecutionSnapshot } from "../execution/alliance/BreakAllianceExecution";
+import { AdminGrantExecutionSnapshot } from "../execution/AdminGrantExecution";
+import { AdminBibisWrathExecutionSnapshot } from "../execution/AdminBibisWrathExecution";
+import { AdminReviveExecutionSnapshot } from "../execution/AdminReviveExecution";
 import { AttackExecutionSnapshot } from "../execution/AttackExecution";
 import { BoatRetreatExecutionSnapshot } from "../execution/BoatRetreatExecution";
 import { CityExecutionSnapshot } from "../execution/CityExecution";
@@ -53,6 +56,9 @@ import type { ExecutionSnapshotType } from "./ExecutionSnapshot";
  * replaced it.
  */
 export const EXECUTION_SNAPSHOT_TYPES = [
+  AdminGrantExecutionSnapshot,
+  AdminReviveExecutionSnapshot,
+  AdminBibisWrathExecutionSnapshot,
   AllianceExtensionExecutionSnapshot,
   AllianceRejectExecutionSnapshot,
   AllianceRequestExecutionSnapshot,

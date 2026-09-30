@@ -2,6 +2,9 @@ import { Execution, Game } from "../game/Game";
 import { PseudoRandom } from "../PseudoRandom";
 import { ClientID, GameID, StampedIntent, Turn } from "../Schemas";
 import { simpleHash } from "../Util";
+import { AdminGrantExecution } from "./AdminGrantExecution";
+import { AdminBibisWrathExecution } from "./AdminBibisWrathExecution";
+import { AdminReviveExecution } from "./AdminReviveExecution";
 import { AllianceExtensionExecution } from "./alliance/AllianceExtensionExecution";
 import { AllianceRejectExecution } from "./alliance/AllianceRejectExecution";
 import { AllianceRequestExecution } from "./alliance/AllianceRequestExecution";
@@ -53,6 +56,28 @@ export class Executor {
   }
 
   createExec(intent: StampedIntent): Execution {
+    // Edu-admin intents act on the simulation without a player seat (the
+    // admin is not a participant), so they bypass the player lookup below.
+    // Authorization happens server-side in IntentAuthorization before the
+    // intent ever reaches the turn queue.
+    switch (intent.type) {
+      case "admin_grant":
+        return new AdminGrantExecution(
+          intent.target,
+          intent.gold,
+          intent.troops,
+        );
+      case "admin_revive":
+        return new AdminReviveExecution(this.gameID_, intent.target);
+      case "admin_bibis_wrath":
+        return new AdminBibisWrathExecution(
+          intent.target,
+          intent.adminName,
+          intent.targetName,
+          intent.isNPC,
+        );
+    }
+
     const player = this.mg.playerByClientID(intent.clientID);
     if (!player) {
       console.warn(`player with clientID ${intent.clientID} not found`);

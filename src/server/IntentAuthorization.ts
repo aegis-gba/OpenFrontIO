@@ -67,6 +67,29 @@ export function authorizeIntent(
       }
       return null;
 
+    case "admin_grant":
+    case "admin_revive":
+      // Simulation-cheating intents: edu-admin only, never the lobby host,
+      // never a player, never the admin bot. The game must be started — gold,
+      // troops, and territory only exist once the simulation is running.
+      if (!actor.isEduAdmin) {
+        return { status: 403, error: "only an edu admin can use this" };
+      }
+      if (!game.hasStarted) {
+        return { status: 409, error: "game has not started" };
+      }
+      return null;
+
+    case "admin_bibis_wrath":
+      // UI splash intent: edu-admin only, never the lobby host, never a
+      // player, never the admin bot. Accepted in the lobby or mid-match —
+      // it's a client overlay, no simulation state is touched. (Lobby-fired
+      // intents queue into the first turn and render as the match begins.)
+      if (!actor.isEduAdmin) {
+        return { status: 403, error: "only an edu admin can use this" };
+      }
+      return null;
+
     case "update_game_config":
       if (!actor.isLobbyCreator && !actor.isAdminBot && !actor.isEduAdmin) {
         return {

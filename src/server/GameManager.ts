@@ -35,6 +35,12 @@ export class GameManager {
     return this.games.get(id) ?? null;
   }
 
+  // Every game on this worker, for the edu-admin server list. Includes
+  // lobbies, active games, and recently finished ones not yet pruned.
+  public allGames(): GameServer[] {
+    return Array.from(this.games.values());
+  }
+
   public publicLobbies(): GameServer[] {
     return Array.from(this.games.values()).filter(
       (g) => g.phase() === GamePhase.Lobby && g.isPublic(),

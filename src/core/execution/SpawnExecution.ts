@@ -46,6 +46,12 @@ export class SpawnExecution implements Execution {
     // callers (PlayerSpawner, NationExecution) are trusted and place players
     // deliberately, including at the end of the spawn phase; a client may not.
     private fromIntent: boolean = false,
+    // True only for the edu-admin revive path (AdminReviveExecution): the
+    // target is a dead player (0 tiles) being respawned mid-match. Bypasses
+    // the random-spawn re-roll guard, which would otherwise refuse anyone who
+    // has ever spawned. Set at construction, so it is identical on every
+    // client and cannot desync.
+    private forceRespawn: boolean = false,
   ) {
     this.random = new PseudoRandom(
       simpleHash(playerInfo.id) + simpleHash(gameID),
@@ -89,7 +95,9 @@ export class SpawnExecution implements Execution {
     }
 
     // Security: If random spawn is enabled, prevent players from re-rolling their spawn location
-    if (this.mg.config().isRandomSpawn() && player.hasSpawned()) {
+    // (the edu-admin revive path sets forceRespawn, which is the only legal
+    // mid-match respawn; it is edu-admin authorized, not client-reachable).
+    if (!this.forceRespawn && this.mg.config().isRandomSpawn() && player.hasSpawned()) {
       return;
     }
 
@@ -228,6 +236,7 @@ export class SpawnExecution implements Execution {
       playerInfo: playerInfoData(this.playerInfo),
       tile: this.tile,
       fromIntent: this.fromIntent,
+      forceRespawn: this.forceRespawn,
     });
   }
 
@@ -239,6 +248,7 @@ export class SpawnExecution implements Execution {
     this.playerInfo = readPlayerInfo(s.playerInfo, r);
     if (s.tile !== undefined) this.tile = s.tile;
     this.fromIntent = s.fromIntent;
+    this.forceRespawn = s.forceRespawn;
   }
 }
 
@@ -251,6 +261,8 @@ const SpawnStateSchema = z.object({
   // Untrusted intent data, validated in tick, so any number.
   tile: zNum().optional(),
   fromIntent: z.boolean(),
+  // Edu-admin revive only; false for every normal spawn.
+  forceRespawn: z.boolean(),
 });
 type SpawnState = z.infer<typeof SpawnStateSchema>;
 

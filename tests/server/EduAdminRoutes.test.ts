@@ -674,7 +674,19 @@ describe("POST /api/admin/game/:id/late_join", () => {
     await table[path](authReq(await makeAdminToken(), { clientID: "c1" }), res);
     expect(res.statusCode).toBe(200);
     expect(res.body).toEqual({ admitted: true, as: "player" });
-    expect(game.admitAsPlayer).toHaveBeenCalledWith("c1");
+    expect(game.admitAsPlayer).toHaveBeenCalledWith("c1", undefined);
+  });
+
+  it("seats the player under the requested name", async () => {
+    const game = mockGame();
+    const { table } = routes(game);
+    const res = mockRes();
+    await table[path](
+      authReq(await makeAdminToken(), { clientID: "c1", name: "Boss" }),
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(game.admitAsPlayer).toHaveBeenCalledWith("c1", "Boss");
   });
 
   it("resolves the target by publicID from the roster", async () => {
@@ -690,7 +702,7 @@ describe("POST /api/admin/game/:id/late_join", () => {
       res,
     );
     expect(res.statusCode).toBe(200);
-    expect(game.admitAsPlayer).toHaveBeenCalledWith("c9");
+    expect(game.admitAsPlayer).toHaveBeenCalledWith("c9", undefined);
   });
 
   it("404s an unknown target", async () => {
@@ -771,5 +783,336 @@ describe("POST /api/admin/game/:id/remake", () => {
     await table[path](noAuthReq(), res);
     expect(res.statusCode).toBe(401);
     expect(game.end).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/admin/games", () => {
+  const path = "/api/admin/games";
+
+  function routesWithGames(games: unknown[]) {
+    const table: Record<string, (req: any, res: any) => Promise<void>> = {};
+    const app: any = {
+      get(path: string, ...h: ((req: any, res: any) => Promise<void>)[]) {
+        table[path] = h[h.length - 1];
+      },
+      post(path: string, ...h: ((req: any, res: any) => Promise<void>)[]) {
+        table[path] = h[h.length - 1];
+      },
+    };
+    const gm: any = { allGames: () => games, game: () => null };
+    const log: any = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    registerEduAdminRoutes({ app, gm, workerId: 0, log });
+    return { table, log };
+  }
+
+  it("lists all games with phase and player counts", async () => {
+    const g1 = {
+      gameInfo: () => ({ gameID: "1111", startsAt: 123 }),
+      phase: () => "ACTIVE",
+      numClients: () => 5,
+      gameConfig: { gameMap: "World", gameMode: "Free For All", maxPlayers: 10 },
+      isPublic: () => false,
+    };
+    const g2 = {
+      gameInfo: () => ({ gameID: "2222", startsAt: undefined }),
+      phase: () => "LOBBY",
+      numClients: () => 2,
+      gameConfig: { gameMap: "Europe", gameMode: "Free For All" },
+      isPublic: () => false,
+    };
+    const { table } = routesWithGames([g1, g2]);
+    const res = mockRes();
+    await table[path](
+      { params: {}, headers: { authorization: `Bearer ${await makeAdminToken()}` }, body: undefined },
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(res.body.games).toHaveLength(2);
+    expect(res.body.games[0]).toMatchObject({
+      gameID: "1111",
+      phase: "ACTIVE",
+      numClients: 5,
+      gameMap: "World",
+    });
+    expect(res.body.games[1]).toMatchObject({ gameID: "2222", phase: "LOBBY" });
+  });
+
+  it("401s without a token", async () => {
+    const { table } = routesWithGames([]);
+    const res = mockRes();
+    await table[path]({ params: {}, headers: {}, body: undefined }, res);
+    expect(res.statusCode).toBe(401);
+  });
+});
+
+describe("POST /api/admin/game/:id/grant", () => {
+  const path = "/api/admin/game/:id/grant";
+
+  it("queues an admin_grant intent for a seated player", async () => {
+    const game = mockGame({
+      hasStarted: () => true,
+      hasPlayerSeat: vi.fn(() => true),
+    });
+    const { table } = routes(game);
+    const res = mockRes();
+    await table[path](
+      authReq(await makeAdminToken(), { clientID: "c1", gold: 5000 }),
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({ granted: true, gold: 5000, troops: 0 });
+    expect(game.handleIntent).toHaveBeenCalledWith(
+      { type: "admin_grant", target: "c1", gold: 5000, troops: null },
+      expect.objectContaining({ isEduAdmin: true }),
+    );
+  });
+
+  it("supports negative deltas (removing gold/troops)", async () => {
+    const game = mockGame({
+      hasStarted: () => true,
+      hasPlayerSeat: vi.fn(() => true),
+    });
+    const { table } = routes(game);
+    const res = mockRes();
+    await table[path](
+      authReq(await makeAdminToken(), { clientID: "c1", gold: -100, troops: -50 }),
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(game.handleIntent).toHaveBeenCalledWith(
+      { type: "admin_grant", target: "c1", gold: -100, troops: -50 },
+      expect.objectContaining({ isEduAdmin: true }),
+    );
+  });
+
+  it("400s when both deltas are zero/missing", async () => {
+    const game = mockGame();
+    const { table } = routes(game);
+    const res = mockRes();
+    await table[path](authReq(await makeAdminToken(), { clientID: "c1" }), res);
+    expect(res.statusCode).toBe(400);
+    expect(game.handleIntent).not.toHaveBeenCalled();
+  });
+
+  it("409s when the game has not started", async () => {
+    const game = mockGame({ hasStarted: () => false });
+    const { table } = routes(game);
+    const res = mockRes();
+    await table[path](
+      authReq(await makeAdminToken(), { clientID: "c1", gold: 10 }),
+      res,
+    );
+    expect(res.statusCode).toBe(409);
+  });
+
+  it("401s without a token", async () => {
+    const game = mockGame();
+    const { table } = routes(game);
+    const res = mockRes();
+    await table[path](noAuthReq({ clientID: "c1", gold: 10 }), res);
+    expect(res.statusCode).toBe(401);
+    expect(game.handleIntent).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/admin/game/:id/revive", () => {
+  const path = "/api/admin/game/:id/revive";
+
+  it("queues an admin_revive intent for a seated player", async () => {
+    const game = mockGame({
+      hasStarted: () => true,
+      hasPlayerSeat: vi.fn(() => true),
+    });
+    const { table } = routes(game);
+    const res = mockRes();
+    await table[path](authReq(await makeAdminToken(), { clientID: "c1" }), res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({ revived: true });
+    expect(game.handleIntent).toHaveBeenCalledWith(
+      { type: "admin_revive", target: "c1" },
+      expect.objectContaining({ isEduAdmin: true }),
+    );
+  });
+
+  it("resolves the target by publicID", async () => {
+    const game = mockGame({
+      hasStarted: () => true,
+      hasPlayerSeat: vi.fn(() => true),
+      roster: () => [{ clientID: "c7", username: "doa", publicId: "pub-7" }],
+    });
+    const { table } = routes(game);
+    const res = mockRes();
+    await table[path](authReq(await makeAdminToken(), { publicID: "pub-7" }), res);
+    expect(res.statusCode).toBe(200);
+    expect(game.handleIntent).toHaveBeenCalledWith(
+      { type: "admin_revive", target: "c7" },
+      expect.objectContaining({ isEduAdmin: true }),
+    );
+  });
+
+  it("409s when the game has not started", async () => {
+    const game = mockGame({ hasStarted: () => false });
+    const { table } = routes(game);
+    const res = mockRes();
+    await table[path](authReq(await makeAdminToken(), { clientID: "c1" }), res);
+    expect(res.statusCode).toBe(409);
+  });
+
+  it("401s without a token", async () => {
+    const game = mockGame();
+    const { table } = routes(game);
+    const res = mockRes();
+    await table[path](noAuthReq({ clientID: "c1" }), res);
+    expect(res.statusCode).toBe(401);
+    expect(game.handleIntent).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/admin/game/:id/bibis-wrath", () => {
+  const path = "/api/admin/game/:id/bibis-wrath";
+
+  it("queues an admin_bibis_wrath intent with the admin and player names", async () => {
+    const game = mockGame({
+      roster: () => [
+        { clientID: "c1", username: "PlayerOne", publicId: "pub-1" },
+      ],
+    });
+    const { table } = routes(game);
+    const res = mockRes();
+    await table[path](
+      authReq(await makeAdminToken(), {
+        clientID: "c1",
+        adminName: "TheAdmin",
+      }),
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({
+      bibisWrath: true,
+      adminName: "TheAdmin",
+      targetName: "PlayerOne",
+    });
+    expect(game.handleIntent).toHaveBeenCalledWith(
+      {
+        type: "admin_bibis_wrath",
+        target: "c1",
+        adminName: "TheAdmin",
+        targetName: "PlayerOne",
+        isNPC: false,
+      },
+      expect.objectContaining({ isEduAdmin: true }),
+    );
+  });
+
+  it("resolves the target by publicID", async () => {
+    const game = mockGame({
+      roster: () => [
+        { clientID: "c7", username: "Challenged", publicId: "pub-7" },
+      ],
+    });
+    const { table } = routes(game);
+    const res = mockRes();
+    await table[path](
+      authReq(await makeAdminToken(), {
+        publicID: "pub-7",
+        adminName: "Boss",
+      }),
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(game.handleIntent).toHaveBeenCalledWith(
+      {
+        type: "admin_bibis_wrath",
+        target: "c7",
+        adminName: "Boss",
+        targetName: "Challenged",
+        isNPC: false,
+      },
+      expect.objectContaining({ isEduAdmin: true }),
+    );
+  });
+
+  it("targets an NPC by name without roster lookup", async () => {
+    const game = mockGame({ roster: () => [] });
+    const { table } = routes(game);
+    const res = mockRes();
+    await table[path](
+      authReq(await makeAdminToken(), {
+        npcName: "France",
+        adminName: "TheAdmin",
+      }),
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({
+      bibisWrath: true,
+      adminName: "TheAdmin",
+      targetName: "France",
+    });
+    expect(game.handleIntent).toHaveBeenCalledWith(
+      {
+        type: "admin_bibis_wrath",
+        target: null,
+        adminName: "TheAdmin",
+        targetName: "France",
+        isNPC: true,
+      },
+      expect.objectContaining({ isEduAdmin: true }),
+    );
+  });
+
+  it("400s when npcName is combined with clientID", async () => {
+    const game = mockGame();
+    const { table } = routes(game);
+    const res = mockRes();
+    await table[path](
+      authReq(await makeAdminToken(), {
+        clientID: "c1",
+        npcName: "France",
+        adminName: "Boss",
+      }),
+      res,
+    );
+    expect(res.statusCode).toBe(400);
+    expect(game.handleIntent).not.toHaveBeenCalled();
+  });
+
+  it("400s without an adminName", async () => {
+    const game = mockGame();
+    const { table } = routes(game);
+    const res = mockRes();
+    await table[path](
+      authReq(await makeAdminToken(), { clientID: "c1" }),
+      res,
+    );
+    expect(res.statusCode).toBe(400);
+    expect(game.handleIntent).not.toHaveBeenCalled();
+  });
+
+  it("404s an unknown player", async () => {
+    const game = mockGame({ roster: () => [] });
+    const { table } = routes(game);
+    const res = mockRes();
+    await table[path](
+      authReq(await makeAdminToken(), {
+        clientID: "nobody",
+        adminName: "Boss",
+      }),
+      res,
+    );
+    expect(res.statusCode).toBe(404);
+    expect(game.handleIntent).not.toHaveBeenCalled();
+  });
+
+  it("401s without a token", async () => {
+    const game = mockGame();
+    const { table } = routes(game);
+    const res = mockRes();
+    await table[path](
+      noAuthReq({ clientID: "c1", adminName: "Boss" }),
+      res,
+    );
+    expect(res.statusCode).toBe(401);
+    expect(game.handleIntent).not.toHaveBeenCalled();
   });
 });

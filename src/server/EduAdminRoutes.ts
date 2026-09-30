@@ -73,6 +73,55 @@ const CheatsBodySchema = z.object({
   startingGold: z.number().int().max(1000000000).nullable().optional(),
 });
 
+// Target a player by live clientID or account publicID (exactly one), for
+// the simulation-level admin commands (grant/revive/late_join).
+const PlayerTargetSchema = z
+  .object({
+    clientID: z.string().min(1).max(100).optional(),
+    publicID: z.string().min(1).max(100).optional(),
+  })
+  .refine(
+    (d) =>
+      (d.clientID !== undefined ? 1 : 0) +
+        (d.publicID !== undefined ? 1 : 0) ===
+      1,
+    { message: "exactly one of clientID, publicID is required" },
+  );
+
+const GrantBodySchema = PlayerTargetSchema.extend({
+  // Deltas: positive grants, negative removes. At least one must be non-zero.
+  gold: z.number().int().min(-1000000000).max(1000000000).optional(),
+  troops: z.number().int().min(-1000000000).max(1000000000).optional(),
+}).refine((d) => (d.gold ?? 0) !== 0 || (d.troops ?? 0) !== 0, {
+  message: "at least one of gold, troops must be non-zero",
+});
+
+const LateJoinBodySchema = PlayerTargetSchema.extend({
+  // Optional display name to seat the player under (lobby phase only).
+  name: z.string().min(1).max(40).optional(),
+});
+
+// Bibi's Wrath targets: a human player (by live clientID or account
+// publicID, resolved against the roster) or an NPC/bot by the name the admin
+// sees in-game (exactly one of the three). Bots live only in the simulation,
+// so the server can't verify an npcName — it's used as-is for the overlay.
+const BibisWrathBodySchema = z
+  .object({
+    clientID: z.string().min(1).max(100).optional(),
+    publicID: z.string().min(1).max(100).optional(),
+    npcName: z.string().min(1).max(40).optional(),
+    // The admin's display name for the left name box.
+    adminName: z.string().min(1).max(40),
+  })
+  .refine(
+    (d) =>
+      (d.clientID !== undefined ? 1 : 0) +
+        (d.publicID !== undefined ? 1 : 0) +
+        (d.npcName !== undefined ? 1 : 0) ===
+      1,
+    { message: "exactly one of clientID, publicID, npcName is required" },
+  );
+
 export function registerEduAdminRoutes(opts: {
   app: Express;
   gm: GameManager;
@@ -133,6 +182,40 @@ export function registerEduAdminRoutes(opts: {
       res.json({ game: game.gameInfo(), stats: game.liveStats() });
     } catch (e) {
       log.warn("edu admin game read failed", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      res.status(500).json({ error: "Internal error" });
+    }
+  });
+
+  // List every game (server) on this worker: lobbies, active matches, and
+  // recently finished ones not yet pruned. Each entry carries the id, phase,
+  // player/spectator counts, and the map name so the admin panel can show
+  // the full server list.
+  app.get("/api/admin/games", async (req, res) => {
+    try {
+      const persistentId = await authenticate(req, res);
+      if (persistentId === null) return;
+      const games = gm.allGames().map((g) => {
+        const info = g.gameInfo();
+        return {
+          gameID: info.gameID,
+          phase: g.phase(),
+          numClients: g.numClients(),
+          gameMap: g.gameConfig.gameMap,
+          gameMode: g.gameConfig.gameMode,
+          maxPlayers: g.gameConfig.maxPlayers ?? null,
+          isPublic: g.isPublic(),
+          startsAt: info.startsAt ?? null,
+        };
+      });
+      log.info("edu admin listed games", {
+        actor: persistentId,
+        count: games.length,
+      });
+      res.json({ games });
+    } catch (e) {
+      log.warn("edu admin games list failed", {
         error: e instanceof Error ? e.message : String(e),
       });
       res.status(500).json({ error: "Internal error" });
@@ -487,7 +570,7 @@ export function registerEduAdminRoutes(opts: {
       if (persistentId === null) return;
       const id = req.params.id as string;
       if (!ownsGame(id, res)) return;
-      const parsed = KickBodySchema.safeParse(req.body ?? {});
+      const parsed = LateJoinBodySchema.safeParse(req.body ?? {});
       if (!parsed.success) {
         return res.status(400).json({ error: z.prettifyError(parsed.error) });
       }
@@ -506,7 +589,7 @@ export function registerEduAdminRoutes(opts: {
         return res.status(404).json({ error: "no matching player found" });
       }
       if (!game.hasStarted()) {
-        const seated = game.admitAsPlayer(target);
+        const seated = game.admitAsPlayer(target, parsed.data.name);
         if (!seated) {
           return res.status(404).json({ error: "no matching player found" });
         }
@@ -514,6 +597,7 @@ export function registerEduAdminRoutes(opts: {
           gameID: id,
           actor: persistentId,
           target,
+          name: parsed.data.name,
         });
         return res.json({ admitted: true, as: "player" });
       }
@@ -537,6 +621,200 @@ export function registerEduAdminRoutes(opts: {
       });
     } catch (e) {
       log.warn("edu admin late_join failed", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      res.status(500).json({ error: "Internal error" });
+    }
+  });
+
+  // Grant (or remove) gold/troops for a player. Goes through the turn queue
+  // as an admin_grant intent so every client's simulation applies the same
+  // delta. Requires a started game.
+  app.post("/api/admin/game/:id/grant", async (req, res) => {
+    try {
+      const persistentId = await authenticate(req, res);
+      if (persistentId === null) return;
+      const id = req.params.id as string;
+      if (!ownsGame(id, res)) return;
+      const parsed = GrantBodySchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({ error: z.prettifyError(parsed.error) });
+      }
+      const game = gm.game(id);
+      if (game === null) {
+        return res.status(404).json({ error: "Game not found" });
+      }
+      let target = parsed.data.clientID;
+      if (target === undefined && parsed.data.publicID !== undefined) {
+        target = game
+          .roster()
+          .find((c: any) => c.publicId === parsed.data.publicID)?.clientID;
+      }
+      if (target === undefined) {
+        return res.status(404).json({ error: "no matching player found" });
+      }
+      // For human players the simulation player ID is the clientID
+      // (GameServer stamps PlayerInfo with id === clientID).
+      if (!game.hasPlayerSeat(target)) {
+        return res
+          .status(409)
+          .json({ error: "game has not started or player has no seat" });
+      }
+      const intent: Intent = {
+        type: "admin_grant",
+        target,
+        gold: parsed.data.gold ?? null,
+        troops: parsed.data.troops ?? null,
+      };
+      const result = game.handleIntent(intent, eduAdminActor(persistentId));
+      if (result.status !== 200) {
+        return res
+          .status(result.status)
+          .json({ error: result.error ?? "error" });
+      }
+      log.info("edu admin granted resources", {
+        gameID: id,
+        actor: persistentId,
+        target,
+        gold: parsed.data.gold,
+        troops: parsed.data.troops,
+      });
+      res.json({
+        granted: true,
+        gold: parsed.data.gold ?? 0,
+        troops: parsed.data.troops ?? 0,
+      });
+    } catch (e) {
+      log.warn("edu admin grant failed", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      res.status(500).json({ error: "Internal error" });
+    }
+  });
+
+  // Revive a dead (eliminated) player: respawns them at a fresh location with
+  // a new PlayerExecution. No-op if the player is still alive. Requires a
+  // started game.
+  app.post("/api/admin/game/:id/revive", async (req, res) => {
+    try {
+      const persistentId = await authenticate(req, res);
+      if (persistentId === null) return;
+      const id = req.params.id as string;
+      if (!ownsGame(id, res)) return;
+      const parsed = PlayerTargetSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({ error: z.prettifyError(parsed.error) });
+      }
+      const game = gm.game(id);
+      if (game === null) {
+        return res.status(404).json({ error: "Game not found" });
+      }
+      let target = parsed.data.clientID;
+      if (target === undefined && parsed.data.publicID !== undefined) {
+        target = game
+          .roster()
+          .find((c: any) => c.publicId === parsed.data.publicID)?.clientID;
+      }
+      if (target === undefined) {
+        return res.status(404).json({ error: "no matching player found" });
+      }
+      // For human players the simulation player ID is the clientID
+      // (GameServer stamps PlayerInfo with id === clientID).
+      if (!game.hasPlayerSeat(target)) {
+        return res
+          .status(409)
+          .json({ error: "game has not started or player has no seat" });
+      }
+      const intent: Intent = { type: "admin_revive", target };
+      const result = game.handleIntent(intent, eduAdminActor(persistentId));
+      if (result.status !== 200) {
+        return res
+          .status(result.status)
+          .json({ error: result.error ?? "error" });
+      }
+      log.info("edu admin revived player", {
+        gameID: id,
+        actor: persistentId,
+        target,
+      });
+      res.json({ revived: true });
+    } catch (e) {
+      log.warn("edu admin revive failed", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      res.status(500).json({ error: "Internal error" });
+    }
+  });
+
+  // Bibi's Wrath: a fullscreen VS splash on every connected client for
+  // 5 seconds — admin name in the left box, the chosen player's name in the
+  // right box. It's an in-game overlay: mid-match it shows on the next turn;
+  // fired in the lobby it's queued into the first turn and shows as the
+  // match begins. No simulation state is touched. Target a human by live
+  // clientID or account publicID (exactly one), or an NPC/bot by its in-game
+  // name via npcName (bots live only in the simulation, so the name is used
+  // as-is for the overlay).
+  app.post("/api/admin/game/:id/bibis-wrath", async (req, res) => {
+    try {
+      const persistentId = await authenticate(req, res);
+      if (persistentId === null) return;
+      const id = req.params.id as string;
+      if (!ownsGame(id, res)) return;
+      const parsed = BibisWrathBodySchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({ error: z.prettifyError(parsed.error) });
+      }
+      const game = gm.game(id);
+      if (game === null) {
+        return res.status(404).json({ error: "Game not found" });
+      }
+      let target: string | null;
+      let targetName: string;
+      let isNPC = false;
+      if (parsed.data.npcName !== undefined) {
+        target = null;
+        targetName = parsed.data.npcName;
+        isNPC = true;
+      } else {
+        const roster = game.roster();
+        let entry = roster.find((c) => c.clientID === parsed.data.clientID);
+        if (!entry && parsed.data.publicID !== undefined) {
+          entry = roster.find((c) => c.publicId === parsed.data.publicID);
+        }
+        if (entry === undefined) {
+          return res.status(404).json({ error: "no matching player found" });
+        }
+        // For human players the simulation player ID is the clientID
+        // (GameServer stamps PlayerInfo with id === clientID).
+        target = entry.clientID;
+        targetName = entry.username;
+      }
+      const intent: Intent = {
+        type: "admin_bibis_wrath",
+        target,
+        adminName: parsed.data.adminName,
+        targetName,
+        isNPC,
+      };
+      const result = game.handleIntent(intent, eduAdminActor(persistentId));
+      if (result.status !== 200) {
+        return res
+          .status(result.status)
+          .json({ error: result.error ?? "error" });
+      }
+      log.info("edu admin unleashed bibi's wrath on player", {
+        gameID: id,
+        actor: persistentId,
+        target,
+        isNPC,
+      });
+      res.json({
+        bibisWrath: true,
+        adminName: parsed.data.adminName,
+        targetName,
+      });
+    } catch (e) {
+      log.warn("edu admin bibi's wrath failed", {
         error: e instanceof Error ? e.message : String(e),
       });
       res.status(500).json({ error: "Internal error" });

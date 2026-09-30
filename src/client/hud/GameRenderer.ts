@@ -34,6 +34,7 @@ import { HeadsUpMessage } from "./layers/HeadsUpMessage";
 import { ImmunityTimer } from "./layers/ImmunityTimer";
 import { InGamePromo } from "./layers/InGamePromo";
 import { MainRadialMenu } from "./layers/MainRadialMenu";
+import { BibisWrathOverlay } from "./layers/BibisWrathOverlay";
 import { MultiTabModal } from "./layers/MultiTabModal";
 import { NewLobbyPrompt } from "./layers/NewLobbyPrompt";
 import { PerformanceOverlay } from "./layers/PerformanceOverlay";
@@ -264,6 +265,14 @@ export function createRenderer(
   }
   headsUpMessage.game = game;
 
+  const bibisWrathOverlay = document.querySelector(
+    "bibis-wrath-overlay",
+  ) as BibisWrathOverlay;
+  if (!(bibisWrathOverlay instanceof BibisWrathOverlay)) {
+    console.error("bibi's wrath overlay not found");
+  }
+  bibisWrathOverlay.game = game;
+
   const performanceOverlay = document.querySelector(
     "performance-overlay",
   ) as PerformanceOverlay;
@@ -358,6 +367,7 @@ export function createRenderer(
     settingsModal,
     playerPanel,
     headsUpMessage,
+    bibisWrathOverlay,
     multiTabModal,
     inGamePromo,
     tutorialPanel,

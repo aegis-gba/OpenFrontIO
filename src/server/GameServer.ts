@@ -1581,9 +1581,12 @@ export class GameServer {
   // Admin late-join: move a connected spectator into a player seat. Only
   // valid before the game starts (the sim's player list is frozen at start).
   // Returns whether the client was found and seated.
-  admitAsPlayer(clientID: string): boolean {
+  admitAsPlayer(clientID: string, name?: string): boolean {
     const client = this.clients.get(clientID as ClientID);
     if (client === undefined) return false;
+    if (name !== undefined && name.length > 0) {
+      client.username = name;
+    }
     if (!client.spectator) return true;
     this.setSpectator(client, false);
     return !client.spectator;

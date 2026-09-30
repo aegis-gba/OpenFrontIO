@@ -44,6 +44,20 @@ const config = (c: Partial<GameConfig>): Intent => ({
 const timer: Intent = { type: "toggle_game_start_timer" };
 const pause: Intent = { type: "toggle_pause", paused: true };
 const spawn: Intent = { type: "spawn", tile: 1 };
+const grant: Intent = {
+  type: "admin_grant",
+  target: cid("p2"),
+  gold: 1000,
+  troops: null,
+};
+const revive: Intent = { type: "admin_revive", target: cid("p2") };
+const bibisWrath: Intent = {
+  type: "admin_bibis_wrath",
+  target: cid("p2"),
+  adminName: "Boss",
+  targetName: "PlayerTwo",
+  isNPC: false,
+};
 
 describe("authorizeIntent", () => {
   it.each<[string, Intent, IntentActor, IntentGameState, number | null]>([
@@ -130,6 +144,58 @@ describe("authorizeIntent", () => {
       unkick,
       eduAdmin,
       lobby({ isPublic: true }),
+      null,
+    ],
+    // admin_grant / admin_revive: edu-admin only, and only once the
+    // simulation is running.
+    ["grant by a player", grant, player, lobby({ hasStarted: true }), 403],
+    ["grant by the host", grant, host, lobby({ hasStarted: true }), 403],
+    ["grant by the admin bot", grant, bot, lobby({ hasStarted: true }), 403],
+    [
+      "grant by edu admin before start",
+      grant,
+      eduAdmin,
+      lobby({ hasStarted: false }),
+      409,
+    ],
+    ["grant by edu admin", grant, eduAdmin, lobby({ hasStarted: true }), null],
+    [
+      "grant by edu admin on a public game",
+      grant,
+      eduAdmin,
+      lobby({ isPublic: true, hasStarted: true }),
+      null,
+    ],
+    ["revive by a player", revive, player, lobby({ hasStarted: true }), 403],
+    ["revive by the host", revive, host, lobby({ hasStarted: true }), 403],
+    ["revive by the admin bot", revive, bot, lobby({ hasStarted: true }), 403],
+    [
+      "revive by edu admin before start",
+      revive,
+      eduAdmin,
+      lobby({ hasStarted: false }),
+      409,
+    ],
+    [
+      "revive by edu admin",
+      revive,
+      eduAdmin,
+      lobby({ hasStarted: true }),
+      null,
+    ],
+    // admin_bibis_wrath: edu-admin only. Accepted in the lobby or mid-match
+    // (lobby-fired intents queue into the first turn) — it's a UI overlay,
+    // no simulation state is touched.
+    ["bibi's wrath by a player", bibisWrath, player, lobby({ hasStarted: true }), 403],
+    ["bibi's wrath by the host", bibisWrath, host, lobby({ hasStarted: true }), 403],
+    ["bibi's wrath by the admin bot", bibisWrath, bot, lobby({ hasStarted: true }), 403],
+    ["bibi's wrath by edu admin mid-match", bibisWrath, eduAdmin, lobby({ hasStarted: true }), null],
+    ["bibi's wrath by edu admin in the lobby", bibisWrath, eduAdmin, lobby(), null],
+    [
+      "bibi's wrath by edu admin on a public game",
+      bibisWrath,
+      eduAdmin,
+      lobby({ isPublic: true, hasStarted: true }),
       null,
     ],
     [

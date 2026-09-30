@@ -106,6 +106,7 @@ export enum GameUpdateType {
   SpawnPhaseEnd,
   GamePaused,
   DonateEvent,
+  BibisWrathEvent,
 }
 
 export type GameUpdate =
@@ -131,7 +132,8 @@ export type GameUpdate =
   | EmbargoUpdate
   | SpawnPhaseEndUpdate
   | GamePausedUpdate
-  | DonateEventUpdate;
+  | DonateEventUpdate
+  | BibisWrathEventUpdate;
 
 export interface BonusEventUpdate {
   type: GameUpdateType.BonusEvent;
@@ -174,6 +176,14 @@ export interface DonateEventUpdate {
   senderId: PlayerID;
   recipientId: PlayerID;
   amount: bigint;
+}
+
+// "Bibi's Wrath": a fullscreen VS splash shown on every client.
+// adminName goes in the left name box, targetName in the right one.
+export interface BibisWrathEventUpdate {
+  type: GameUpdateType.BibisWrathEvent;
+  adminName: string;
+  targetName: string;
 }
 
 export interface UnitUpdate {
